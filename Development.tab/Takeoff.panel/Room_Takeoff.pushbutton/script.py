@@ -61,17 +61,24 @@ def get_room_details(room):
     Get details of a room.
     """
     room_id = room.Id.IntegerValue
+    room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
+    room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
     room_level = doc.GetElement(room.LevelId).Name
-    room_building = room.LookupParameter("בניין").AsString()
-    return room_id, room_level, room_building
+    room_building_param = room.LookupParameter("בניין")
+    room_building = room_building_param.AsString() if room_building_param else None
+    return room_id, room_name, room_number, room_level, room_building
 
 def get_ceiling_details(ceiling):
     """
     Get details of a ceiling.
     """
     ceiling_id = ceiling.Id.IntegerValue
-    ceiling_type = doc.GetElement(ceiling.GetTypeId()).FamilyName
-    ceiling_description = ceiling.Name
+    ceiling_type_element = doc.GetElement(ceiling.GetTypeId())
+    ceiling_type = ceiling_type_element.FamilyName
+    
+    ceiling_description_param = ceiling_type_element.LookupParameter("Description")
+    ceiling_description = ceiling_description_param.AsString() if ceiling_description_param else None
+    
     return ceiling_id, ceiling_type, ceiling_description
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
@@ -81,7 +88,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     relationships = []
 
     for room in room_elements:
-        room_id, room_level, room_building = get_room_details(room)
+        room_id, room_name, room_number, room_level, room_building = get_room_details(room)
         room_geom = get_element_geometry(room)
         if not room_geom:
             debug_messages.append(f"No geometry found for room ID: {room_id}")
@@ -95,13 +102,14 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 continue
 
             if ceiling.LevelId != room.LevelId:
-                debug_messages.append(f"Ceiling ID {ceiling_id} is not on the same level as Room ID {room_id}")
                 continue
 
             intersection_percentage_room, intersection_percentage_ceiling, intersection_area = calculate_intersection_percentage(room_geom, ceiling_geom)
             if intersection_percentage_room > 0:
                 relationships.append({
                     'Room_ID': room_id,
+                    'Room_Name': room_name,
+                    'Room_Number': room_number,
                     'Room_Level': room_level,
                     'Room_Building': room_building,
                     'Ceiling_ID': ceiling_id,
@@ -110,22 +118,33 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Intersection_Area_sqm': intersection_area
                 })
 
+        if room_id not in [r['Room_ID'] for r in relationships]:
+            relationships.append({
+                'Room_ID': room_id,
+                'Room_Name': room_name,
+                'Room_Number': room_number,
+                'Room_Level': room_level,
+                'Room_Building': room_building,
+                'Ceiling_ID': None,
+                'Ceiling_Type': None,
+                'Ceiling_Description': None,
+                'Intersection_Area_sqm': 0
+            })
+
     return pd.DataFrame(relationships)
 
 # Main script execution
-try:
-    # Collect room and ceiling elements
-    room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-    ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-    # Find the relationships between rooms and ceilings
-    df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
+# Collect room and ceiling elements
+room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
+ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-    # Output the dataframe
-    output_file_path = "C:\\Users\\oriashkenazi\\Exports" + "\\room_ceiling_relationships.csv"
-    df_relationships.to_csv(output_file_path, index=False)
-    print(f"Schedule saved to {output_file_path}")
+# Find the relationships between rooms and ceilings
+df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
-except Exception as e:
-    debug_messages.append(f"Error in main execution: {e}")
-    print(debug_messages)
+# Output the dataframe with timestamp
+timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+output_file_path = f"C:\\Users\\oriashkenazi\\Exports\\room_ceiling_relationships_{timestamp}.xlsx"
+df_relationships.to_excel(output_file_path, index=False)
+print(f"Schedule saved to {output_file_path}")
+print(debug_messages)
