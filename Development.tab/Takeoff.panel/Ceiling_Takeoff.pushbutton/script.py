@@ -8,6 +8,7 @@ import pandas as pd
 import datetime
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -43,10 +44,9 @@ def project_to_xy_plane(solid):
                     for point in curve.Tessellate():
                         vertices.append((point.X, point.Y))
                 polygon = Polygon(vertices)
-                if polygon.is_valid:
-                    return polygon
-                else:
-                    return make_valid(polygon)
+                if not polygon.is_valid:
+                    polygon = make_valid(polygon)
+                return polygon
     return None
 
 def calculate_intersection_area(geom1, geom2):
@@ -58,17 +58,26 @@ def calculate_intersection_area(geom1, geom2):
     try:
         polygons1 = []
         for solid in geom1:
-            polygons1.extend(project_to_xy_plane(solid))
+            polygon = project_to_xy_plane(solid)
+            if polygon:
+                polygons1.append(polygon)
         
         polygons2 = []
         for solid in geom2:
-            polygons2.extend(project_to_xy_plane(solid))
+            polygon = project_to_xy_plane(solid)
+            if polygon:
+                polygons2.append(polygon)
 
         if polygons1 and polygons2:
             union1 = unary_union(polygons1)
             union2 = unary_union(polygons2)
             intersection = union1.intersection(union2)
-            intersection_area = intersection.area * 0.092903  # Convert from square feet to square meters
+            if isinstance(intersection, (Polygon, MultiPolygon)):
+                if isinstance(intersection, Polygon):
+                    intersection = MultiPolygon([intersection])
+                intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
+            elif isinstance(intersection, MultiPolygon):
+                intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
     except Exception as e:
         debug_messages.append(f"Error in calculate_intersection_area: {e}")
         intersection_area = 0
