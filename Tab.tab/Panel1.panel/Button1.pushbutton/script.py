@@ -5,6 +5,7 @@ clr.AddReference('RevitAPI')
 clr.AddReference('System')
 from Autodesk.Revit.DB import *
 import pandas as pd
+import datetime
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -55,29 +56,45 @@ def calculate_intersection_percentage(geom1, geom2):
     percentage2 = (intersection_area / area2) * 100 if area2 > 0 else 0
     return percentage1, percentage2, intersection_area
 
+def get_room_details(room):
+    """
+    Get details of a room.
+    """
+    room_id = room.Id.IntegerValue
+    room_level = doc.GetElement(room.LevelId).Name
+    room_building = room.LookupParameter("בניין").AsString()
+    return room_id, room_level, room_building
+
+def get_ceiling_details(ceiling):
+    """
+    Get details of a ceiling.
+    """
+    ceiling_id = ceiling.Id.IntegerValue
+    ceiling_type = doc.GetElement(ceiling.GetTypeId()).FamilyName
+    ceiling_description = ceiling.Name
+    return ceiling_id, ceiling_type, ceiling_description
+
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
     """
-    Find the relationship between ceilings and rooms in terms of intersection percentage.
+    Find the relationship between ceilings and rooms in terms of intersection percentage and area.
     """
     relationships = []
 
     for room in room_elements:
-        room_id = room.Id.IntegerValue
+        room_id, room_level, room_building = get_room_details(room)
         room_geom = get_element_geometry(room)
         if not room_geom:
             debug_messages.append(f"No geometry found for room ID: {room_id}")
             continue
 
-        room_level = room.LevelId
-
         for ceiling in ceiling_elements:
-            ceiling_id = ceiling.Id.IntegerValue
+            ceiling_id, ceiling_type, ceiling_description = get_ceiling_details(ceiling)
             ceiling_geom = get_element_geometry(ceiling)
             if not ceiling_geom:
                 debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
                 continue
 
-            if ceiling.LevelId != room_level:
+            if ceiling.LevelId != room.LevelId:
                 debug_messages.append(f"Ceiling ID {ceiling_id} is not on the same level as Room ID {room_id}")
                 continue
 
@@ -85,25 +102,29 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             if intersection_percentage_room > 0:
                 relationships.append({
                     'Room_ID': room_id,
+                    'Room_Level': room_level,
+                    'Room_Building': room_building,
                     'Ceiling_ID': ceiling_id,
-                    'Intersection_Percentage_Room': intersection_percentage_room,
-                    'Intersection_Percentage_Ceiling': intersection_percentage_ceiling,
-                    'Intersection_Area': intersection_area
+                    'Ceiling_Type': ceiling_type,
+                    'Ceiling_Description': ceiling_description,
+                    'Intersection_Area_sqm': intersection_area
                 })
 
     return pd.DataFrame(relationships)
 
 # Main script execution
 try:
-    # Inputs
-    room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).ToElements()
+    # Collect room and ceiling elements
+    room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
     ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
     # Find the relationships between rooms and ceilings
     df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
     # Output the dataframe
-    print(df_relationships)
+    output_file_path = "C:\\Users\\oriashkenazi\\Exports" + "\\room_ceiling_relationships.csv"
+    df_relationships.to_csv(output_file_path, index=False)
+    print(f"Schedule saved to {output_file_path}")
 
 except Exception as e:
     debug_messages.append(f"Error in main execution: {e}")
