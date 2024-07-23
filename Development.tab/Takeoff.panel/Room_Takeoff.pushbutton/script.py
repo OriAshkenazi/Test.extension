@@ -6,6 +6,9 @@ clr.AddReference('System')
 from Autodesk.Revit.DB import *
 import pandas as pd
 import datetime
+from shapely.geometry import Polygon, MultiPolygon
+from shapely.ops import unary_union
+from shapely.validation import make_valid
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -29,32 +32,55 @@ def get_element_geometry(element):
 
 def project_to_xy_plane(solid):
     """
-    Project solid geometry to the XY plane.
+    Project the lower horizontal face of solid geometry to the XY plane.
     """
-    return [face for face in solid.Faces if abs(face.ComputeNormal(UV(0.5, 0.5)).Z) > 0.99]
+    for face in solid.Faces:
+        normal = face.ComputeNormal(UV(0.5, 0.5))
+        if abs(normal.Z) > 0.99 and normal.Z < 0:  # Check if the face is horizontal and facing down
+            edge_loops = face.GetEdgesAsCurveLoops()
+            for loop in edge_loops:
+                vertices = []
+                for curve in loop:
+                    for point in curve.Tessellate():
+                        vertices.append((point.X, point.Y))
+                polygon = Polygon(vertices)
+                if not polygon.is_valid:
+                    polygon = make_valid(polygon)
+                return polygon
+    return None
 
-def get_intersecting_area(solid1, solid2):
+def calculate_intersection_area(geom1, geom2):
     """
-    Calculate the intersecting area between two solids.
+    Calculate the intersecting area between two geometries in sqm.
     """
+    intersection_area = 0
+
     try:
-        intersection = BooleanOperationsUtils.ExecuteBooleanOperation(solid1, solid2, BooleanOperationsType.Intersect)
-        if intersection and isinstance(intersection, Solid):
-            return sum(face.Area for face in project_to_xy_plane(intersection))
-    except Exception as e:
-        debug_messages.append(f"Error in get_intersecting_area: {e}")
-    return 0
+        polygons1 = []
+        for solid in geom1:
+            polygon = project_to_xy_plane(solid)
+            if polygon:
+                polygons1.append(polygon)
+        
+        polygons2 = []
+        for solid in geom2:
+            polygon = project_to_xy_plane(solid)
+            if polygon:
+                polygons2.append(polygon)
 
-def calculate_intersection_percentage(geom1, geom2):
-    """
-    Calculate the intersection percentage between two geometries.
-    """
-    area1 = sum(face.Area for solid in geom1 for face in project_to_xy_plane(solid))
-    area2 = sum(face.Area for solid in geom2 for face in project_to_xy_plane(solid))
-    intersection_area = get_intersecting_area(geom1[0], geom2[0]) if geom1 and geom2 else 0
-    percentage1 = (intersection_area / area1) * 100 if area1 > 0 else 0
-    percentage2 = (intersection_area / area2) * 100 if area2 > 0 else 0
-    return percentage1, percentage2, intersection_area
+        if polygons1 and polygons2:
+            union1 = unary_union(polygons1)
+            union2 = unary_union(polygons2)
+            intersection = union1.intersection(union2)
+            if isinstance(intersection, Polygon):
+                intersection_area = intersection.area * 0.092903  # Convert from square feet to square meters
+            elif isinstance(intersection, MultiPolygon):
+                intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
+    except Exception as e:
+        debug_messages.append(f"Error in calculate_intersection_area: {e}")
+        intersection_area = 0
+
+    return intersection_area
 
 def get_room_details(room):
     """
@@ -79,55 +105,64 @@ def get_ceiling_details(ceiling):
     ceiling_description_param = ceiling_type_element.LookupParameter("Description")
     ceiling_description = ceiling_description_param.AsString() if ceiling_description_param else None
     
-    return ceiling_id, ceiling_type, ceiling_description
+    ceiling_area_param = ceiling.LookupParameter("Area")
+    ceiling_area = ceiling_area_param.AsDouble() * 0.092903 if ceiling_area_param else None  # Convert from square feet to square meters
+
+    ceiling_level = doc.GetElement(ceiling.LevelId).Name if ceiling.LevelId else None
+
+    return ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
     """
-    Find the relationship between ceilings and rooms in terms of intersection percentage and area.
+    Find the relationship between ceilings and rooms in terms of intersection area.
     """
     relationships = []
 
-    for room in room_elements:
-        room_id, room_name, room_number, room_level, room_building = get_room_details(room)
-        room_geom = get_element_geometry(room)
-        if not room_geom:
-            debug_messages.append(f"No geometry found for room ID: {room_id}")
+    for ceiling in ceiling_elements:
+        ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level = get_ceiling_details(ceiling)
+        ceiling_geom = get_element_geometry(ceiling)
+        if not ceiling_geom:
+            debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
             continue
-
-        for ceiling in ceiling_elements:
-            ceiling_id, ceiling_type, ceiling_description = get_ceiling_details(ceiling)
-            ceiling_geom = get_element_geometry(ceiling)
-            if not ceiling_geom:
-                debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
+        
+        for room in room_elements:
+            room_id, room_name, room_number, room_level, room_building = get_room_details(room)
+            room_geom = get_element_geometry(room)
+            if not room_geom:
+                debug_messages.append(f"No geometry found for room ID: {room_id}")
                 continue
 
             if ceiling.LevelId != room.LevelId:
                 continue
 
-            intersection_percentage_room, intersection_percentage_ceiling, intersection_area = calculate_intersection_percentage(room_geom, ceiling_geom)
-            if intersection_percentage_room > 0:
+            intersection_area = calculate_intersection_area(room_geom, ceiling_geom)
+            if intersection_area > 0:
                 relationships.append({
+                    'Ceiling_ID': ceiling_id,
+                    'Ceiling_Type': ceiling_type,
+                    'Ceiling_Description': ceiling_description,
+                    'Ceiling_Area_sqm': ceiling_area,
+                    'Ceiling_Level': ceiling_level,
                     'Room_ID': room_id,
                     'Room_Name': room_name,
                     'Room_Number': room_number,
                     'Room_Level': room_level,
                     'Room_Building': room_building,
-                    'Ceiling_ID': ceiling_id,
-                    'Ceiling_Type': ceiling_type,
-                    'Ceiling_Description': ceiling_description,
                     'Intersection_Area_sqm': intersection_area
                 })
 
-        if room_id not in [r['Room_ID'] for r in relationships]:
+        if ceiling_id not in [r['Ceiling_ID'] for r in relationships]:
             relationships.append({
-                'Room_ID': room_id,
-                'Room_Name': room_name,
-                'Room_Number': room_number,
-                'Room_Level': room_level,
-                'Room_Building': room_building,
-                'Ceiling_ID': None,
-                'Ceiling_Type': None,
-                'Ceiling_Description': None,
+                'Ceiling_ID': ceiling_id,
+                'Ceiling_Type': ceiling_type,
+                'Ceiling_Description': ceiling_description,
+                'Ceiling_Area_sqm': ceiling_area,
+                'Ceiling_Level': ceiling_level,
+                'Room_ID': None,
+                'Room_Name': None,
+                'Room_Number': None,
+                'Room_Level': None,
+                'Room_Building': None,
                 'Intersection_Area_sqm': 0
             })
 
@@ -139,12 +174,12 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
 room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
 ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-# Find the relationships between rooms and ceilings
+# Find the relationships between ceilings and rooms
 df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
 # Output the dataframe with timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file_path = f"C:\\Users\\oriashkenazi\\Exports\\room_ceiling_relationships_{timestamp}.xlsx"
+output_file_path = f"C:\\Users\\oriashkenazi\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
 df_relationships.to_excel(output_file_path, index=False)
 print(f"Schedule saved to {output_file_path}")
 print(debug_messages)
