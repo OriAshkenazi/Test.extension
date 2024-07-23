@@ -114,22 +114,24 @@ def get_ceiling_details(ceiling):
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
     """
-    Find the relationship between ceilings and rooms in terms of intersection area.
+    Find the relationship between rooms and ceilings in terms of intersection area.
     """
     relationships = []
 
-    for ceiling in ceiling_elements:
-        ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level = get_ceiling_details(ceiling)
-        ceiling_geom = get_element_geometry(ceiling)
-        if not ceiling_geom:
-            debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
+    for room in room_elements:
+        room_id, room_name, room_number, room_level, room_building = get_room_details(room)
+        room_geom = get_element_geometry(room)
+        if not room_geom:
+            debug_messages.append(f"No geometry found for room ID: {room_id}")
             continue
-        
-        for room in room_elements:
-            room_id, room_name, room_number, room_level, room_building = get_room_details(room)
-            room_geom = get_element_geometry(room)
-            if not room_geom:
-                debug_messages.append(f"No geometry found for room ID: {room_id}")
+
+        room_ceiling_data = []
+
+        for ceiling in ceiling_elements:
+            ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level = get_ceiling_details(ceiling)
+            ceiling_geom = get_element_geometry(ceiling)
+            if not ceiling_geom:
+                debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
                 continue
 
             if ceiling.LevelId != room.LevelId:
@@ -137,34 +139,34 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
 
             intersection_area = calculate_intersection_area(room_geom, ceiling_geom)
             if intersection_area > 0:
-                relationships.append({
-                    'Ceiling_ID': ceiling_id,
-                    'Ceiling_Type': ceiling_type,
-                    'Ceiling_Description': ceiling_description,
-                    'Ceiling_Area_sqm': ceiling_area,
-                    'Ceiling_Level': ceiling_level,
+                room_ceiling_data.append({
                     'Room_ID': room_id,
                     'Room_Name': room_name,
                     'Room_Number': room_number,
                     'Room_Level': room_level,
                     'Room_Building': room_building,
+                    'Ceiling_ID': ceiling_id,
+                    'Ceiling_Type': ceiling_type,
+                    'Ceiling_Description': ceiling_description,
+                    'Ceiling_Area_sqm': ceiling_area,
                     'Intersection_Area_sqm': intersection_area
                 })
 
-        if ceiling_id not in [r['Ceiling_ID'] for r in relationships]:
+        if not room_ceiling_data:
             relationships.append({
-                'Ceiling_ID': ceiling_id,
-                'Ceiling_Type': ceiling_type,
-                'Ceiling_Description': ceiling_description,
-                'Ceiling_Area_sqm': ceiling_area,
-                'Ceiling_Level': ceiling_level,
-                'Room_ID': None,
-                'Room_Name': None,
-                'Room_Number': None,
-                'Room_Level': None,
-                'Room_Building': None,
+                'Room_ID': room_id,
+                'Room_Name': room_name,
+                'Room_Number': room_number,
+                'Room_Level': room_level,
+                'Room_Building': room_building,
+                'Ceiling_ID': None,
+                'Ceiling_Type': None,
+                'Ceiling_Description': None,
+                'Ceiling_Area_sqm': None,
                 'Intersection_Area_sqm': 0
             })
+        else:
+            relationships.extend(room_ceiling_data)
 
     return pd.DataFrame(relationships)
 
@@ -174,12 +176,12 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
 room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
 ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-# Find the relationships between ceilings and rooms
+# Find the relationships between rooms and ceilings
 df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
 # Output the dataframe with timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file_path = f"C:\\Users\\oriashkenazi\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
+output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\room_ceiling_relationships_{timestamp}.xlsx"
 df_relationships.to_excel(output_file_path, index=False)
 print(f"Schedule saved to {output_file_path}")
 print(debug_messages)

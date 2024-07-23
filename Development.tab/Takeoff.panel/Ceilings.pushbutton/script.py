@@ -106,7 +106,7 @@ def get_ceiling_details(ceiling):
     ceiling_description = ceiling_description_param.AsString() if ceiling_description_param else None
     
     ceiling_area_param = ceiling.LookupParameter("Area")
-    ceiling_area = ceiling_area_param.AsDouble() * 0.092903 if ceiling_area_param else None  # Convert from square feet to square meters
+    ceiling_area = ceiling_area_param.AsDouble() * 0.092903 if ceiling_area_param else None # Convert from square feet to square meters
 
     ceiling_level = doc.GetElement(ceiling.LevelId).Name if ceiling.LevelId else None
 
@@ -179,7 +179,7 @@ df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elemen
 
 # Output the dataframe with timestamp
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file_path = f"C:\\Users\\oriashkenazi\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
+output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
 df_relationships.to_excel(output_file_path, index=False)
 print(f"Schedule saved to {output_file_path}")
 print(debug_messages)
