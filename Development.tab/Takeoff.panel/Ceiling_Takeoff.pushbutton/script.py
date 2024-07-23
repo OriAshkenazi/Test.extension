@@ -72,10 +72,8 @@ def calculate_intersection_area(geom1, geom2):
             union1 = unary_union(polygons1)
             union2 = unary_union(polygons2)
             intersection = union1.intersection(union2)
-            if isinstance(intersection, (Polygon, MultiPolygon)):
-                if isinstance(intersection, Polygon):
-                    intersection = MultiPolygon([intersection])
-                intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
+            if isinstance(intersection, Polygon):
+                intersection_area = intersection.area * 0.092903  # Convert from square feet to square meters
             elif isinstance(intersection, MultiPolygon):
                 intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
     except Exception as e:
@@ -112,7 +110,6 @@ def get_ceiling_details(ceiling):
 
     ceiling_level = doc.GetElement(ceiling.LevelId).Name if ceiling.LevelId else None
 
-    
     return ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
