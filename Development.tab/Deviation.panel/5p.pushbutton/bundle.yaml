@@ -1,4 +1,4 @@
 title:
-  en_us: 5%
+  en_us: 5 percetage deviation
 tooltip:
   en_us: Identifies elements significantly far from the center of mass in the model. Generates a detailed list of these elements, including their IDs, distances, and coordinates. Highlights these elements in the Revit model for easy inspection and management. Use this tool to locate and address elements that might be causing the model's frame to stretch and affect visibility.
