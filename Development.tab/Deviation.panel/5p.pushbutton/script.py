@@ -32,6 +32,24 @@ def get_element_center(element):
         return center
     return None
 
+# Function to get additional details of an element
+def get_element_details(element):
+    element_details = {
+        'ElementId': element.Id.IntegerValue,
+        'Category': element.Category.Name if element.Category else 'N/A',
+        'Family': 'N/A',
+        'Type': 'N/A',
+        'LinkedModel': 'N/A'
+    }
+    if isinstance(element, FamilyInstance):
+        element_details['Family'] = element.Symbol.Family.Name
+        element_details['Type'] = element.Symbol.Name
+    if isinstance(element, RevitLinkInstance):
+        linked_doc = element.GetLinkDocument()
+        if linked_doc:
+            element_details['LinkedModel'] = linked_doc.Title
+    return element_details
+
 # Create a list to store element data
 element_data = []
 
@@ -39,7 +57,9 @@ element_data = []
 for element in collector:
     center = get_element_center(element)
     if center:
-        element_data.append({'ElementId': element.Id.IntegerValue, 'X': center.X, 'Y': center.Y, 'Z': center.Z})
+        details = get_element_details(element)
+        details.update({'X': center.X, 'Y': center.Y, 'Z': center.Z})
+        element_data.append(details)
 
 # Convert the list to a pandas DataFrame
 df = pd.DataFrame(element_data)
