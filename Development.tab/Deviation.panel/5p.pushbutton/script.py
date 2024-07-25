@@ -42,8 +42,12 @@ def get_element_details(element):
         'LinkedModel': 'N/A'
     }
     if isinstance(element, FamilyInstance):
-        element_details['Family'] = element.Symbol.Family.Name
-        element_details['Type'] = element.Symbol.Name
+        try:
+            element_details['Family'] = element.Symbol.Family.Name if element.Symbol else 'N/A'
+            element_details['Type'] = element.Symbol.Name if element.Symbol else 'N/A'
+        except:
+            element_details['Family'] = 'N/A'
+            element_details['Type'] = 'N/A'
     if isinstance(element, RevitLinkInstance):
         linked_doc = element.GetLinkDocument()
         if linked_doc:
