@@ -13,9 +13,9 @@ clr.AddReference('RevitServices')
 from RevitServices.Persistence import DocumentManager
 from RevitServices.Transactions import TransactionManager
 
-# Initialize the document
-doc = DocumentManager.Instance.CurrentDBDocument
-uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
+# Get the current document and UIDocument
+doc = __revit__.ActiveUIDocument.Document
+uidoc = __revit__.ActiveUIDocument
 
 # Get all elements in the model
 collector = FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()
