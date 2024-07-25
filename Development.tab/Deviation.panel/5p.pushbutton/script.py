@@ -54,17 +54,17 @@ df['Distance'] = np.linalg.norm(coordinates - center_of_mass, axis=1)
 # Sort the DataFrame by distance
 df = df.sort_values(by='Distance').reset_index(drop=True)
 
-# Identify elements until a drastic change in distance
-drastic_change_index = None
-for i in range(1, len(df)):
-    if df['Distance'].iloc[i] > 1.5 * df['Distance'].iloc[i - 1]:  # This is an arbitrary threshold for drastic change
-        drastic_change_index = i
-        break
+# Calculate the first derivative of the distances
+df['Derivative'] = df['Distance'].diff().abs()
 
-if drastic_change_index is None:
-    drastic_change_index = len(df)
+# Find the maximum derivative
+max_derivative = df['Derivative'].max()
 
-selected_elements = df.iloc[:drastic_change_index]
+# Identify elements until the maximum derivative
+drastic_change_index = df['Derivative'].idxmax()
+
+# Select elements up to the point of drastic change
+selected_elements = df.iloc[:drastic_change_index + 1]
 
 # Prepare the file path and name
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
