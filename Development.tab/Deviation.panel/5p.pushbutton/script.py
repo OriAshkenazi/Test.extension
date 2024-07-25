@@ -4,7 +4,7 @@ import clr
 import math
 import pandas as pd
 import numpy as np
-from Autodesk.Revit.DB import FilteredElementCollector, ElementId, XYZ, BuiltInCategory, RevitLinkInstance, FamilyInstance
+from Autodesk.Revit.DB import FilteredElementCollector, ElementId, XYZ, BuiltInCategory, RevitLinkInstance, FamilyInstance, FamilySymbol, Transaction
 from Autodesk.Revit.UI import TaskDialog
 from System.Collections.Generic import List
 from datetime import datetime
@@ -104,9 +104,16 @@ selected_elements.to_excel(file_path, index=False)
 output = selected_elements.to_string(columns=['ElementId', 'Distance', 'X', 'Y', 'Z'], index=False)
 TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}\n\nExported to {file_path}")
 
-# Optionally, highlight far elements in Revit
-far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId']]
-uidoc.Selection.SetElementIds(List[ElementId](far_element_ids))
+# Function to hide very far elements in the current view
+def hide_very_far_elements(view, element_ids):
+    with Transaction(doc, "Hide Very Far Elements") as t:
+        t.Start()
+        for elem_id in element_ids:
+            view.HideElements(List[ElementId]([elem_id]))
+        t.Commit()
+
+# Hide the very far elements in the current view
+hide_very_far_elements(uidoc.ActiveView, far_element_ids)
 
 # If you want to return the element IDs instead of showing a TaskDialog
 # You can use the following line to return them as a list
