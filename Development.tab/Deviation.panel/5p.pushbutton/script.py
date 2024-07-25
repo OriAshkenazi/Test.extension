@@ -104,6 +104,9 @@ selected_elements.to_excel(file_path, index=False)
 output = selected_elements.to_string(columns=['ElementId', 'Distance', 'X', 'Y', 'Z'], index=False)
 TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}\n\nExported to {file_path}")
 
+# Get the ElementIds of the selected elements
+far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId']]
+
 # Function to hide very far elements in the current view
 def hide_very_far_elements(view, element_ids):
     with Transaction(doc, "Hide Very Far Elements") as t:
