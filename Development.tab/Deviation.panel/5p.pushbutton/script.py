@@ -119,8 +119,8 @@ def hide_very_far_elements(doc, view, element_ids):
                 element_ids_to_hide.Add(ElementId(eid))
         
         if element_ids_to_hide.Count > 0:
-            t = Transaction(doc, "Hide Very Far Elements")
-            t.Start()
+            t = Transaction(doc)
+            t.Start("Hide Very Far Elements")
             try:
                 view.HideElements(element_ids_to_hide)
                 t.Commit()
