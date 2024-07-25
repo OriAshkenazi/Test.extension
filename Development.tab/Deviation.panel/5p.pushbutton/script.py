@@ -101,7 +101,7 @@ os.makedirs(os.path.dirname(file_path), exist_ok=True)
 selected_elements.to_excel(file_path, index=False)
 
 # Output detailed information about far elements
-output = selected_elements.to_string(columns=['ElementId', 'Distance', 'X', 'Y', 'Z'], index=False)
+output = selected_elements.to_string(columns=['ElementId', 'Category', 'Family', 'Type', 'LinkedModel', 'Distance', 'X', 'Y', 'Z', 'Derivative'], index=False)
 TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}\n\nExported to {file_path}")
 
 # Get the ElementIds of the selected elements
@@ -109,15 +109,15 @@ far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId']
 
 # Function to hide very far elements in the current view
 def hide_very_far_elements(view, element_ids):
-    t = Transaction(doc, "Hide Very Far Elements")
-    t.Start()
-    try:
-        for elem_id in element_ids:
-            view.HideElements(List[ElementId]([elem_id]))
-        t.Commit()
-    except:
-        t.RollBack()
-        raise
+    if element_ids:
+        t = Transaction(doc, "Hide Very Far Elements")
+        t.Start()
+        try:
+            view.HideElements(List[ElementId](element_ids))
+            t.Commit()
+        except:
+            t.RollBack()
+            raise
 
 # Hide the very far elements in the current view
 hide_very_far_elements(uidoc.ActiveView, far_element_ids)
