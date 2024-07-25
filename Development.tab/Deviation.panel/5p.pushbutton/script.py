@@ -6,7 +6,7 @@ import pandas as pd
 import numpy as np
 from Autodesk.Revit.DB import FilteredElementCollector, ElementId, XYZ, BuiltInCategory, RevitLinkInstance, FamilyInstance, FamilySymbol, Transaction
 from Autodesk.Revit.UI import TaskDialog
-from System.Collections.Generic import List
+from System.Collections.Generic import List as ClrList
 from datetime import datetime
 import os
 
@@ -90,44 +90,50 @@ drastic_change_index = df['Derivative'].idxmax()
 # Select elements up to the point of drastic change
 selected_elements = df.iloc[:drastic_change_index + 1]
 
-# Prepare the file path and name
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-file_path = f"\\Mac\\Home\\Documents\\Shapir\\Exports\\Deviation\\FarElements_{timestamp}.xlsx"
+# # Prepare the file path and name
+# timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+# file_path = f"\\Mac\\Home\\Documents\\Shapir\\Exports\\Deviation\\FarElements_{timestamp}.xlsx"
 
-# Ensure the directory exists
-os.makedirs(os.path.dirname(file_path), exist_ok=True)
+# # Ensure the directory exists
+# os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
 # Export the list to Excel
-selected_elements.to_excel(file_path, index=False)
+# selected_elements.to_excel(file_path, index=False)
 
-# Output detailed information about far elements
-output = selected_elements.to_string(columns=['ElementId', 'Category', 'Family', 'Type', 'LinkedModel', 'Distance', 'X', 'Y', 'Z', 'Derivative'], index=False)
-TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}\n\nExported to {file_path}")
+# # Output detailed information about far elements
+# output = selected_elements.to_string(columns=['ElementId', 'Category', 'Family', 'Type', 'LinkedModel', 'Distance', 'X', 'Y', 'Z', 'Derivative'], index=False)
+# TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}\n\nExported to {file_path}")
 
 # Get the ElementIds of the selected elements
-far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId']]
+far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId'].tolist()]
+print(far_element_ids)
 
 # Function to hide very far elements in the current view
-def hide_very_far_elements(view, element_ids):
+def hide_very_far_elements(doc, view, element_ids):
     if element_ids:
         # Filter out elements that cannot be hidden or are already hidden
-        element_ids_to_hide = [eid for eid in element_ids if view.CanBeHidden(eid) and not view.IsHidden(eid)]
-        if element_ids_to_hide:
+        element_ids_to_hide = ClrList[ElementId]()
+        for eid in element_ids:
+            element = doc.GetElement(ElementId(eid))
+            if element and element.CanBeHidden(view) and not element.IsHidden(view):
+                element_ids_to_hide.Add(ElementId(eid))
+        
+        if element_ids_to_hide.Count > 0:
             t = Transaction(doc, "Hide Very Far Elements")
             t.Start()
             try:
-                view.HideElements(List[ElementId](element_ids_to_hide))
+                view.HideElements(element_ids_to_hide)
                 t.Commit()
-            except:
+            except Exception as e:
                 t.RollBack()
-                raise
+                TaskDialog.Show("Error", str(e))
         else:
-            print("No elements to hide.")
+            TaskDialog.Show("Info", "No elements to hide.")
     else:
-        print("No elements to hide.")
+        TaskDialog.Show("Info", "No elements to hide.")
 
 # Hide the very far elements in the current view
-hide_very_far_elements(uidoc.ActiveView, far_element_ids)
+hide_very_far_elements(doc, uidoc.ActiveView, far_element_ids)
 
 # If you want to return the element IDs instead of showing a TaskDialog
 # You can use the following line to return them as a list
