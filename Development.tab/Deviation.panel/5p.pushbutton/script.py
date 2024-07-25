@@ -1,10 +1,8 @@
-#! python3
-
 import clr
 import math
 import pandas as pd
 import numpy as np
-from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, ElementId, XYZ
+from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, ElementId, XYZ, Transaction
 from Autodesk.Revit.UI import TaskDialog
 from System.Collections.Generic import List
 
@@ -15,6 +13,7 @@ from RevitServices.Transactions import TransactionManager
 
 # Initialize the document
 doc = DocumentManager.Instance.CurrentDBDocument
+uidoc = DocumentManager.Instance.CurrentUIApplication.ActiveUIDocument
 
 # Get all elements in the model
 collector = FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()
@@ -50,9 +49,13 @@ df['Distance'] = np.linalg.norm(coordinates - center_of_mass, axis=1)
 threshold = df['Distance'].quantile(0.95)
 far_elements = df[df['Distance'] > threshold]
 
-# Output the element IDs
-output = "\n".join(map(str, far_elements['ElementId'].tolist()))
-TaskDialog.Show("Far Elements", f"Element IDs of distinctly far objects:\n{output}")
+# Output detailed information about far elements
+output = far_elements.to_string(columns=['ElementId', 'Distance', 'X', 'Y', 'Z'], index=False)
+TaskDialog.Show("Far Elements", f"Elements far from the center of mass:\n{output}")
+
+# Optionally, highlight far elements in Revit
+far_element_ids = [ElementId(int(eid)) for eid in far_elements['ElementId']]
+uidoc.Selection.SetElementIds(List[ElementId](far_element_ids))
 
 # If you want to return the element IDs instead of showing a TaskDialog
 # You can use the following line to return them as a list
