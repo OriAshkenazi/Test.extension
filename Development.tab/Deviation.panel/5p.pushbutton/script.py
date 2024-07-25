@@ -109,11 +109,15 @@ far_element_ids = [ElementId(int(eid)) for eid in selected_elements['ElementId']
 
 # Function to hide very far elements in the current view
 def hide_very_far_elements(view, element_ids):
-    with Transaction(doc, "Hide Very Far Elements") as t:
-        t.Start()
+    t = Transaction(doc, "Hide Very Far Elements")
+    t.Start()
+    try:
         for elem_id in element_ids:
             view.HideElements(List[ElementId]([elem_id]))
         t.Commit()
+    except:
+        t.RollBack()
+        raise
 
 # Hide the very far elements in the current view
 hide_very_far_elements(uidoc.ActiveView, far_element_ids)
