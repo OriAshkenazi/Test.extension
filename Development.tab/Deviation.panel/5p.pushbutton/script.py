@@ -4,7 +4,7 @@ import clr
 import math
 import pandas as pd
 import numpy as np
-from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, ElementId, XYZ, Transaction
+from Autodesk.Revit.DB import FilteredElementCollector, ElementId, XYZ, BuiltInCategory, RevitLinkInstance, FamilyInstance
 from Autodesk.Revit.UI import TaskDialog
 from System.Collections.Generic import List
 from datetime import datetime
