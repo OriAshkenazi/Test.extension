@@ -24,7 +24,9 @@ collector = FilteredElementCollector(doc).WhereElementIsNotElementType().ToEleme
 def get_element_center(element):
     bbox = element.get_BoundingBox(None)
     if bbox:
-        center = (bbox.Min + bbox.Max) / 2.0
+        center = XYZ((bbox.Min.X + bbox.Max.X) / 2.0,
+                     (bbox.Min.Y + bbox.Max.Y) / 2.0,
+                     (bbox.Min.Z + bbox.Max.Z) / 2.0)
         return center
     return None
 
