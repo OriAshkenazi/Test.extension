@@ -114,9 +114,9 @@ def hide_very_far_elements(doc, view, element_ids):
         # Filter out elements that cannot be hidden or are already hidden
         element_ids_to_hide = ClrList[ElementId]()
         for eid in element_ids:
-            element = doc.GetElement(ElementId(eid))
+            element = doc.GetElement(eid)
             if element and element.CanBeHidden(view) and not element.IsHidden(view):
-                element_ids_to_hide.Add(ElementId(eid))
+                element_ids_to_hide.Add(eid)
         
         if element_ids_to_hide.Count > 0:
             t = Transaction(doc)

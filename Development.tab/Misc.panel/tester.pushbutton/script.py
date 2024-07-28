@@ -2,49 +2,34 @@
 
 import clr
 clr.AddReference('RevitAPI')
-clr.AddReference('System')
+clr.AddReference('RevitServices')
+from RevitServices.Persistence import DocumentManager
+from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, CeilingType
 
-from Autodesk.Revit.DB import *
+# Get the current document
+doc = __revit__.Instance.CurrentDBDocument
 
-def get_ceiling_details(ceiling):
-    """
-    Get details of a ceiling.
-    """
-    ceiling_id = ceiling.Id.IntegerValue
-    ceiling_type_element = doc.GetElement(ceiling.GetTypeId())
-    ceiling_type = ceiling_type_element.FamilyName
+# Collect all ceiling elements in the document
+ceilings = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Ceilings).WhereElementIsNotElementType().ToElements()
+
+# Initialize an empty list to store ceiling information
+ceiling_info = []
+
+# Iterate through each ceiling element
+for ceiling in ceilings:
+    # Get the ceiling type
+    ceiling_type = doc.GetElement(ceiling.GetTypeId())
     
-    ceiling_description_param = ceiling_type_element.LookupParameter("Description")
-    ceiling_description = ceiling_description_param.AsString() if ceiling_description_param else None
+    # Get the ceiling type name
+    type_name = ceiling_type.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM).AsString()
     
-    return ceiling_id, ceiling_type, ceiling_description
+    # Get the height offset from level
+    height_offset_param = ceiling.get_Parameter(BuiltInParameter.CEILING_HEIGHTABOVELEVEL_PARAM)
+    height_offset = height_offset_param.AsDouble() if height_offset_param else 0.0
+    
+    # Append the ceiling information to the list
+    ceiling_info.append((type_name, height_offset))
 
-def get_room_details(room):
-    """
-    Get details of a room.
-    """
-    room_id = room.Id.IntegerValue
-    room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
-    room_level = doc.GetElement(room.LevelId).Name
-    room_building_param = room.LookupParameter("בניין")
-    room_building = room_building_param.AsString() if room_building_param else None
-    return room_id, room_name, room_level, room_building
-
-# Example usage:
-doc = __revit__.ActiveUIDocument.Document
-# ceilings = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_Ceilings).WhereElementIsNotElementType().ToElements()
-
-# for ceiling in ceilings:
-#     ceiling_id, ceiling_type, ceiling_description = get_ceiling_details(ceiling)
-#     print(f"Ceiling ID: {ceiling_id}, Type: {ceiling_type}, Description: {ceiling_description}")
-#     continue
-
-# Collect all rooms in the model
-rooms = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-
-# Print details of each room
-for room in rooms:
-    room_id, room_name, room_level, room_building = get_room_details(room)
-    print(f"Room ID: {room_id}, Name: {room_name}, Level: {room_level}, Room Building: {room_building}\n")
-
-
+# Print the ceiling information
+for info in ceiling_info:
+    print(f"Ceiling Type: {info[0]}, Height Offset from Level: {info[1]:.2f} feet")
