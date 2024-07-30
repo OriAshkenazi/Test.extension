@@ -163,6 +163,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
             continue
         
+        ceiling_has_intersection = False
         for room in room_elements:
             room_id, room_name, room_number, room_level, room_building = get_room_details(room)
             room_geom = get_element_geometry(room)
@@ -188,8 +189,9 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Room_Building': room_building,
                     'Intersection_Area_sqm': intersection_area
                 })
+                ceiling_has_intersection = True
 
-        if ceiling_id not in [r['Ceiling_ID'] for r in relationships]:
+        if not ceiling_has_intersection:
             relationships.append({
                 'Ceiling_ID': ceiling_id,
                 'Ceiling_Type': ceiling_type,
@@ -245,6 +247,9 @@ df_relationships.fillna('', inplace=True)
 
 # Pivot and sort data
 pivot_df, non_intersecting_df = pivot_data(df_relationships)
+
+# Ensure non-intersecting DataFrame has correct columns
+non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
 
 # Output the dataframe with timestamp and formatted Excel
 timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
