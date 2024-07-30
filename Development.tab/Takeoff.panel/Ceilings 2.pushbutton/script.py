@@ -229,7 +229,13 @@ def pivot_data(df):
                                            aggfunc='first').reset_index()
 
     # Sort pivoted data
-    pivot_df.sort_values(by=['Room_Building', 'Room_Level', 'Room_Name'], inplace=True)
+    pivot_df.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'], inplace=True)
+
+    # Ensure non-intersecting DataFrame has correct columns
+    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
+
+    # Sort non-intersecting data
+    non_intersecting_df.sort_values(by=['Ceiling_Level', 'Ceiling_Type'], inplace=True)
 
     return pivot_df, non_intersecting_df
 
@@ -248,7 +254,8 @@ df_relationships.fillna('', inplace=True)
 # Pivot and sort data
 pivot_df, non_intersecting_df = pivot_data(df_relationships)
 
-# Ensure non-intersecting DataFrame has correct columns
+# Explicitly define columns for both DataFrames
+pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Name', 'Room_Number', 'Room_ID', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm']]
 non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
 
 # Output the dataframe with timestamp and formatted Excel
@@ -274,9 +281,14 @@ with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
     })
     
     for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
-        for col_num, value in enumerate(pivot_df.columns.values):
-            worksheet.write(0, col_num, value, header_format)
-            worksheet.set_column(col_num, col_num, 20)  # Set column width
+        if worksheet == pivot_worksheet:
+            for col_num, value in enumerate(pivot_df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+                worksheet.set_column(col_num, col_num, 20)  # Set column width
+        else:
+            for col_num, value in enumerate(non_intersecting_df.columns.values):
+                worksheet.write(0, col_num, value, header_format)
+                worksheet.set_column(col_num, col_num, 20)  # Set column width
 
-print(f"Schedule saved to {output_file_path}")
 print(debug_messages)
+print(f"Schedule saved to {output_file_path}")
