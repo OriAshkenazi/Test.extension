@@ -385,7 +385,7 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
 
 def pivot_data(df_relationships):
     """
-    Pivot the relationships data around rooms.
+    Pivot the relationships data around rooms, preserving all ceiling information.
     
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
@@ -393,19 +393,27 @@ def pivot_data(df_relationships):
     Returns:
         pandas.DataFrame: Pivoted DataFrame with rooms as index and ceiling information as columns.
     """
-    pivoted = df_relationships.pivot_table(
-        index=['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID'],
-        values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm'],
-        aggfunc='first'
-    ).reset_index()
+    # Group by room information and aggregate ceiling data
+    grouped = df_relationships.groupby(['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID']).agg({
+        'Ceiling_ID': lambda x: ', '.join(map(str, x)),
+        'Ceiling_Type': lambda x: ', '.join(set(x)),
+        'Ceiling_Description': lambda x: ', '.join(set(x)),
+        'Ceiling_Area_sqm': 'sum',
+        'Intersection_Area_sqm': 'sum',
+        'Direct_Intersection': lambda x: ', '.join(map(str, x)),
+        'XY_Projection_Intersection': lambda x: ', '.join(map(str, x))
+    }).reset_index()
     
-    # Sort the pivoted DataFrame
-    pivoted = pivoted.sort_values(
+    # Add a column for the number of ceilings
+    grouped['Number_of_Ceilings'] = grouped['Ceiling_ID'].apply(lambda x: len(x.split(', ')))
+    
+    # Sort the grouped DataFrame
+    grouped = grouped.sort_values(
         by=['Room_Building', 'Room_Level', 'Room_Number'],
         key=lambda x: x.map(custom_sort_key)
     )
 
-    return pivoted
+    return grouped
 
 def main():
     """
