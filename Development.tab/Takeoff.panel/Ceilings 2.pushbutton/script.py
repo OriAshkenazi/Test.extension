@@ -248,6 +248,15 @@ def get_ceiling_details(ceiling):
 
     return ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level
 
+def custom_sort_key(value):
+    """
+    Custom sorting function to handle numeric strings as numbers.
+    """
+    try:
+        return float(value)
+    except ValueError:
+        return value
+
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
     """
     Find the relationship between ceilings and rooms based on the two vectors.
@@ -321,10 +330,16 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
     
     # Sort the relationships DataFrame
-    df_relationships = df_relationships.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
+    df_relationships = df_relationships.sort_values(
+        by=['Room_Building', 'Room_Level', 'Room_Number'],
+        key=lambda x: x.map(custom_sort_key)
+    )
     
     # Sort the unrelated ceilings DataFrame
-    df_unrelated = df_unrelated.sort_values(by=['Ceiling_Level', 'Ceiling_Type'])
+    df_unrelated = df_unrelated.sort_values(
+        by=['Ceiling_Level', 'Ceiling_Type'],
+        key=lambda x: x.map(custom_sort_key)
+    )
 
     return df_relationships, df_unrelated
 
@@ -359,8 +374,11 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
     df_rooms_without_ceilings = pd.DataFrame(rooms_without_ceilings)
     
     # Sort the DataFrame
-    df_rooms_without_ceilings = df_rooms_without_ceilings.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
-    
+    df_rooms_without_ceilings = df_rooms_without_ceilings.sort_values(
+        by=['Room_Building', 'Room_Level', 'Room_Number'],
+        key=lambda x: x.map(custom_sort_key)
+    )
+
     return df_rooms_without_ceilings
 
 def pivot_data(df_relationships):
@@ -380,8 +398,11 @@ def pivot_data(df_relationships):
     ).reset_index()
     
     # Sort the pivoted DataFrame
-    pivoted = pivoted.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
-    
+    pivoted = pivoted.sort_values(
+        by=['Room_Building', 'Room_Level', 'Room_Number'],
+        key=lambda x: x.map(custom_sort_key)
+    )
+        
     return pivoted
 
 def main():
