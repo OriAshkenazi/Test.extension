@@ -328,6 +328,41 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
 
     return df_relationships, df_unrelated
 
+def find_rooms_without_ceilings(df_relationships, room_elements):
+    """
+    Identify rooms that don't have associated ceilings.
+    
+    Args:
+        df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
+        room_elements (list): List of all room elements.
+    
+    Returns:
+        pandas.DataFrame: DataFrame containing rooms without ceilings.
+    """
+    # Get all room IDs from the relationships DataFrame
+    rooms_with_ceilings = set(df_relationships['Room_ID'])
+    
+    # Identify rooms without ceilings
+    rooms_without_ceilings = []
+    for room in room_elements:
+        room_id = room.Id.IntegerValue
+        if room_id not in rooms_with_ceilings:
+            room_details = get_room_details(room)
+            rooms_without_ceilings.append({
+                'Room_ID': room_details[0],
+                'Room_Name': room_details[1],
+                'Room_Number': room_details[2],
+                'Room_Level': room_details[3],
+                'Room_Building': room_details[4]
+            })
+    
+    df_rooms_without_ceilings = pd.DataFrame(rooms_without_ceilings)
+    
+    # Sort the DataFrame
+    df_rooms_without_ceilings = df_rooms_without_ceilings.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
+    
+    return df_rooms_without_ceilings
+
 def pivot_data(df_relationships):
     """
     Pivot the relationships data around rooms.
@@ -363,6 +398,9 @@ def main():
 
         # Pivot the relationships data
         df_pivoted = pivot_data(df_relationships)
+
+        # Find rooms without ceilings
+        df_rooms_without_ceilings = find_rooms_without_ceilings(df_relationships, room_elements)
 
         # Output the dataframe with timestamp and formatted Excel
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
