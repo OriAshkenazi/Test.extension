@@ -5,6 +5,7 @@ from functools import lru_cache
 clr.AddReference('RevitAPI')
 clr.AddReference('System')
 from Autodesk.Revit.DB import *
+from Autodesk.Revit.Exceptions import InvalidOperationException
 import pandas as pd
 import datetime
 from shapely.geometry import Polygon, MultiPolygon
@@ -138,9 +139,33 @@ def check_direct_intersection(room_id, ceiling_id):
     ceiling_geom = get_element_geometry(ceiling_id)
     for room_solid in room_geom:
         for ceiling_solid in ceiling_geom:
-            if BooleanOperationsUtils.ExecuteBooleanOperation(room_solid, ceiling_solid, BooleanOperationsType.Intersect).Volume > 0:
-                return True
+            try:
+                intersection_solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                    room_solid, ceiling_solid, BooleanOperationsType.Intersect)
+                if intersection_solid.Volume > 0:
+                    return True
+            except Autodesk.Revit.Exceptions.InvalidOperationException:
+                # If Boolean operation fails, fall back to bounding box check
+                room_bb = room_solid.GetBoundingBox()
+                ceiling_bb = ceiling_solid.GetBoundingBox()
+                if (room_bb.Intersects(ceiling_bb)):
+                    return True
     return False
+
+def check_bounding_box_intersection(room_id, ceiling_id):
+    """
+    Check if the bounding boxes of the room and ceiling intersect.
+    
+    Args:
+        room_id (ElementId): The ID of the room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+    
+    Returns:
+        bool: True if the bounding boxes intersect, False otherwise.
+    """
+    room_bb = get_element_bounding_box(room_id)
+    ceiling_bb = get_element_bounding_box(ceiling_id)
+    return room_bb.Intersects(ceiling_bb)
 
 def project_and_check_xy_intersection(room_id, ceiling_id):
     """
@@ -255,7 +280,11 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 continue
             
             # Check for direct intersection
-            direct_intersection = check_direct_intersection(room_id, ceiling_id)
+            try:
+                direct_intersection = check_direct_intersection(room_id, ceiling_id)
+            except Exception as e:
+                debug_messages.append(f"Error in direct intersection check: {e}")
+                direct_intersection = check_bounding_box_intersection(room_id, ceiling_id)
             
             # Check for XY projection intersection and Z-axis proximity
             xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
@@ -344,60 +373,66 @@ def main():
     """
     Main function to execute the script.
     """
-    # Collect room and ceiling elements
-    room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-    ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
+    try:
+        # Collect room and ceiling elements
+        room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
+        ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-    # Find the relationships between ceilings and rooms
-    df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
+        # Find the relationships between ceilings and rooms
+        df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
-    # Normalize and clean data
-    df_relationships.fillna('', inplace=True)
+        # Normalize and clean data
+        df_relationships.fillna('', inplace=True)
 
-    # Pivot and sort data
-    pivot_df, non_intersecting_df = pivot_data(df_relationships)
+        # Pivot and sort data
+        pivot_df, non_intersecting_df = pivot_data(df_relationships)
 
-    # Explicitly define columns for both DataFrames
-    pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 
-                         'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 
-                         'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 
-                         'Closest_Ceiling']]
+        # Explicitly define columns for both DataFrames
+        pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 
+                            'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 
+                            'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 
+                            'Closest_Ceiling']]
+        
+        non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 
+                                                'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 
+                                                'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 
+                                                'Intersection_Area_sqm', 'Direct_Intersection', 
+                                                'XY_Projection_Intersection', 'Closest_Ceiling']]
+
+        # Output the dataframe with timestamp and formatted Excel
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
+
+        # Export to Excel with formatting
+        with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
+            pivot_df.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
+            non_intersecting_df.to_excel(writer, sheet_name='Non-Intersecting Ceilings', index=False)
+            
+            workbook = writer.book
+            pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
+            non_intersecting_worksheet = writer.sheets['Non-Intersecting Ceilings']
+            
+            # Apply header format
+            header_format = workbook.add_format({
+                'bold': True,
+                'text_wrap': True,
+                'valign': 'top',
+                'fg_color': '#D7E4BC',
+                'border': 1
+            })
+            
+            for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
+                for col_num, value in enumerate(worksheet.table.columns):
+                    worksheet.write(0, col_num, value, header_format)
+                    worksheet.set_column(col_num, col_num, 20)  # Set column width
+        print(f"Schedule saved to {output_file_path}")
     
-    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 
-                                               'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 
-                                               'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 
-                                               'Intersection_Area_sqm', 'Direct_Intersection', 
-                                               'XY_Projection_Intersection', 'Closest_Ceiling']]
-
-    # Output the dataframe with timestamp and formatted Excel
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
-
-    # Export to Excel with formatting
-    with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
-        pivot_df.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
-        non_intersecting_df.to_excel(writer, sheet_name='Non-Intersecting Ceilings', index=False)
-        
-        workbook = writer.book
-        pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
-        non_intersecting_worksheet = writer.sheets['Non-Intersecting Ceilings']
-        
-        # Apply header format
-        header_format = workbook.add_format({
-            'bold': True,
-            'text_wrap': True,
-            'valign': 'top',
-            'fg_color': '#D7E4BC',
-            'border': 1
-        })
-        
-        for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
-            for col_num, value in enumerate(worksheet.table.columns):
-                worksheet.write(0, col_num, value, header_format)
-                worksheet.set_column(col_num, col_num, 20)  # Set column width
-
-    print(debug_messages)
-    print(f"Schedule saved to {output_file_path}")
+    except Exception as e:
+        debug_messages.append(f"Error in main function: {e}")
+    
+    print("Debug messages:")
+    for msg in debug_messages:
+        print(msg)
 
 # Call the main function
 if __name__ == "__main__":
