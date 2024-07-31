@@ -339,7 +339,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     
     # Sort the unrelated ceilings DataFrame
     df_unrelated = df_unrelated.sort_values(
-        by=['Ceiling_Level', 'Ceiling_Type'],
+        by=['Ceiling_Level', 'Ceiling_Description'],
         key=lambda x: x.map(custom_sort_key)
     )
 
