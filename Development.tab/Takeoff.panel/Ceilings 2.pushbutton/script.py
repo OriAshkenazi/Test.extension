@@ -257,29 +257,31 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         ceiling_elements (list): List of ceiling elements.
     
     Returns:
-        pandas.DataFrame: DataFrame containing the relationships between ceilings and rooms.
+        tuple: Two pandas DataFrames - one for related ceilings and rooms, one for unrelated ceilings.
     """
     relationships = []
-    ceiling_ids = [ceiling.Id for ceiling in ceiling_elements]
+    unrelated_ceilings = []
+    room_ids = [room.Id for room in room_elements]
 
-    for room in room_elements:
-        room_id = room.Id
-        room_details = get_room_details(room)
-        room_bb = get_element_bounding_box(room_id)
+    for ceiling in ceiling_elements:
+        ceiling_id = ceiling.Id
+        ceiling_details = get_ceiling_details(ceiling)
+        ceiling_bb = get_element_bounding_box(ceiling_id)
         
-        if not get_element_geometry(room_id):
-            debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
+        if not get_element_geometry(ceiling_id):
+            debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
+            unrelated_ceilings.append(ceiling_details)
             continue
         
-        matched_ceilings = []
+        matched_rooms = []
         
-        for ceiling_id in ceiling_ids:
-            ceiling = doc.GetElement(ceiling_id)
-            ceiling_details = get_ceiling_details(ceiling)
-            ceiling_bb = get_element_bounding_box(ceiling_id)
+        for room_id in room_ids:
+            room = doc.GetElement(room_id)
+            room_details = get_room_details(room)
+            room_bb = get_element_bounding_box(room_id)
             
-            if not get_element_geometry(ceiling_id):
-                debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
+            if not get_element_geometry(room_id):
+                debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
                 continue
             
             # Check for direct intersection
@@ -289,13 +291,12 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 debug_messages.append(f"Error in direct intersection check: {e}")
                 direct_intersection = check_bounding_box_intersection(room_id, ceiling_id)
             
-            # Check for XY projection intersection and Z-axis proximity
+            # Check for XY projection intersection
             xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
-            above_room = is_ceiling_above_room(room_id, ceiling_id)
             
-            if direct_intersection or (xy_intersection and above_room):
+            if direct_intersection or xy_intersection:
                 intersection_area = calculate_intersection_area(room_id, ceiling_id)
-                matched_ceilings.append({
+                matched_rooms.append({
                     'Ceiling_ID': ceiling_details[0],
                     'Ceiling_Type': ceiling_details[1],
                     'Ceiling_Description': ceiling_details[2],
@@ -311,33 +312,21 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'XY_Projection_Intersection': xy_intersection
                 })
         
-        if not matched_ceilings:
-            # If no matching ceilings found, find the closest ceiling above the room
-            closest_ceiling = min((c for c in ceiling_elements if is_ceiling_above_room(room_id, c.Id)), 
-                                  key=lambda c: get_element_bounding_box(c.Id).Min.Z - room_bb.Max.Z, 
-                                  default=None)
-            if closest_ceiling:
-                ceiling_details = get_ceiling_details(closest_ceiling)
-                matched_ceilings.append({
-                    'Ceiling_ID': ceiling_details[0],
-                    'Ceiling_Type': ceiling_details[1],
-                    'Ceiling_Description': ceiling_details[2],
-                    'Ceiling_Area_sqm': ceiling_details[3],
-                    'Ceiling_Level': ceiling_details[4],
-                    'Room_ID': room_details[0],
-                    'Room_Name': room_details[1],
-                    'Room_Number': room_details[2],
-                    'Room_Level': room_details[3],
-                    'Room_Building': room_details[4],
-                    'Intersection_Area_sqm': 0,
-                    'Direct_Intersection': False,
-                    'XY_Projection_Intersection': False,
-                    'Closest_Ceiling': True
-                })
-        
-        relationships.extend(matched_ceilings)
+        if matched_rooms:
+            relationships.extend(matched_rooms)
+        else:
+            unrelated_ceilings.append(ceiling_details)
 
-    return pd.DataFrame(relationships)
+    df_relationships = pd.DataFrame(relationships)
+    df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
+    
+    # Sort the relationships DataFrame
+    df_relationships = df_relationships.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
+    
+    # Sort the unrelated ceilings DataFrame
+    df_unrelated = df_unrelated.sort_values(by=['Ceiling_Level', 'Ceiling_Type'])
+
+    return df_relationships, df_unrelated
 
 def pivot_data(df):
     """
@@ -368,7 +357,7 @@ def pivot_data(df):
     non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 'Closest_Ceiling']]
 
     # Sort non-intersecting data
-    non_intersecting_df.sort_values(by=['Ceiling_Level', 'Ceiling_Type'], inplace=True)
+    non_intersecting_df.sort_values(by=['Ceiling_Level', 'Ceiling_Description'], inplace=True)
 
     return pivot_df, non_intersecting_df
 
