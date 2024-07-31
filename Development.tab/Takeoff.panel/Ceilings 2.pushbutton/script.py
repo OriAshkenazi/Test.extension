@@ -19,7 +19,15 @@ debug_messages = []
 
 @lru_cache(maxsize=None)
 def get_element_geometry(element_id):
-    """Memoized function to get the geometry of a Revit element."""
+    """
+    Memoized function to get the geometry of a Revit element.
+    
+    Args:
+        element_id (ElementId): The ID of the Revit element.
+    
+    Returns:
+        tuple or None: A tuple of Solid objects representing the element's geometry, or None if no valid geometry is found.
+    """
     element = doc.GetElement(element_id)
     try:
         geom = element.get_Geometry(Options())
@@ -33,7 +41,15 @@ def get_element_geometry(element_id):
 
 @lru_cache(maxsize=None)
 def get_element_bounding_box(element_id):
-    """Memoized function to get the bounding box of an element."""
+    """
+    Memoized function to get the bounding box of an element.
+    
+    Args:
+        element_id (ElementId): The ID of the Revit element.
+    
+    Returns:
+        BoundingBoxXYZ: The bounding box of the element.
+    """
     element = doc.GetElement(element_id)
     return element.get_BoundingBox(None)
 
@@ -69,8 +85,8 @@ def calculate_intersection_area(geom1_id, geom2_id):
     Calculate the intersecting area between two geometries in sqm.
     
     Args:
-        geom1 (List[Solid]): The list of solids representing the first geometry.
-        geom2 (List[Solid]): The list of solids representing the second geometry.
+        geom1_id (ElementId): The ID of the first Revit element.
+        geom2_id (ElementId): The ID of the second Revit element.
     
     Returns:
         float: The intersecting area in square meters.
@@ -108,7 +124,16 @@ def calculate_intersection_area(geom1_id, geom2_id):
     return intersection_area
 
 def check_direct_intersection(room_id, ceiling_id):
-    """Check if there's a direct intersection between room and ceiling geometries."""
+    """
+    Check if there's a direct intersection between room and ceiling geometries.
+    
+    Args:
+        room_id (ElementId): The ID of the room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+    
+    Returns:
+        bool: True if there's a direct intersection, False otherwise.
+    """
     room_geom = get_element_geometry(room_id)
     ceiling_geom = get_element_geometry(ceiling_id)
     for room_solid in room_geom:
@@ -118,7 +143,16 @@ def check_direct_intersection(room_id, ceiling_id):
     return False
 
 def project_and_check_xy_intersection(room_id, ceiling_id):
-    """Project geometries to XY plane and check for intersection."""
+    """
+    Project geometries to XY plane and check for intersection.
+    
+    Args:
+        room_id (ElementId): The ID of the room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+    
+    Returns:
+        bool: True if there's an intersection in the XY projection, False otherwise.
+    """
     room_geom = get_element_geometry(room_id)
     ceiling_geom = get_element_geometry(ceiling_id)
     room_polygons = [project_to_xy_plane(solid) for solid in room_geom if solid]
@@ -130,7 +164,16 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
     return room_union.intersects(ceiling_union)
 
 def is_ceiling_above_room(room_id, ceiling_id):
-    """Check if the ceiling is above the room."""
+    """
+    Check if the ceiling is above the room.
+    
+    Args:
+        room_id (ElementId): The ID of the room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+    
+    Returns:
+        bool: True if the ceiling is above the room, False otherwise.
+    """
     room_bb = get_element_bounding_box(room_id)
     ceiling_bb = get_element_bounding_box(ceiling_id)
     return ceiling_bb.Min.Z >= room_bb.Max.Z
@@ -178,7 +221,16 @@ def get_ceiling_details(ceiling):
     return ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
-    """Find the relationship between ceilings and rooms based on the two vectors."""
+    """
+    Find the relationship between ceilings and rooms based on the two vectors.
+    
+    Args:
+        room_elements (list): List of room elements.
+        ceiling_elements (list): List of ceiling elements.
+    
+    Returns:
+        pandas.DataFrame: DataFrame containing the relationships between ceilings and rooms.
+    """
     relationships = []
     ceiling_ids = [ceiling.Id for ceiling in ceiling_elements]
 
@@ -271,71 +323,82 @@ def pivot_data(df):
     non_intersecting_df = df[df['Intersection_Area_sqm'] == 0]
 
     # Pivot intersecting data
-    pivot_df = intersecting_df.pivot_table(index=['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID'],
-                                           values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm'],
-                                           aggfunc='first').reset_index()
+    pivot_df = intersecting_df.pivot_table(
+        index=['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID'],
+        values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 'Closest_Ceiling'],
+        aggfunc='first'
+    ).reset_index()
 
     # Sort pivoted data
     pivot_df.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'], inplace=True)
 
     # Ensure non-intersecting DataFrame has correct columns
-    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
+    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 'Closest_Ceiling']]
 
     # Sort non-intersecting data
     non_intersecting_df.sort_values(by=['Ceiling_Level', 'Ceiling_Type'], inplace=True)
 
     return pivot_df, non_intersecting_df
 
-# Main script execution
+def main():
+    """
+    Main function to execute the script.
+    """
+    # Collect room and ceiling elements
+    room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
+    ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
-# Collect room and ceiling elements
-room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
+    # Find the relationships between ceilings and rooms
+    df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
-# Find the relationships between ceilings and rooms
-df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
+    # Normalize and clean data
+    df_relationships.fillna('', inplace=True)
 
-# Normalize and clean data
-df_relationships.fillna('', inplace=True)
+    # Pivot and sort data
+    pivot_df, non_intersecting_df = pivot_data(df_relationships)
 
-# Pivot and sort data
-pivot_df, non_intersecting_df = pivot_data(df_relationships)
-
-# Explicitly define columns for both DataFrames
-pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm']]
-non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
-
-# Output the dataframe with timestamp and formatted Excel
-timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
-
-# Export to Excel with formatting
-with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
-    pivot_df.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
-    non_intersecting_df.to_excel(writer, sheet_name='Non-Intersecting Ceilings', index=False)
+    # Explicitly define columns for both DataFrames
+    pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 
+                         'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 
+                         'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 
+                         'Closest_Ceiling']]
     
-    workbook = writer.book
-    pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
-    non_intersecting_worksheet = writer.sheets['Non-Intersecting Ceilings']
-    
-    # Apply header format
-    header_format = workbook.add_format({
-        'bold': True,
-        'text_wrap': True,
-        'valign': 'top',
-        'fg_color': '#D7E4BC',
-        'border': 1
-    })
-    
-    for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
-        if worksheet == pivot_worksheet:
-            for col_num, value in enumerate(pivot_df.columns.values):
+    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 
+                                               'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 
+                                               'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 
+                                               'Intersection_Area_sqm', 'Direct_Intersection', 
+                                               'XY_Projection_Intersection', 'Closest_Ceiling']]
+
+    # Output the dataframe with timestamp and formatted Excel
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
+
+    # Export to Excel with formatting
+    with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
+        pivot_df.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
+        non_intersecting_df.to_excel(writer, sheet_name='Non-Intersecting Ceilings', index=False)
+        
+        workbook = writer.book
+        pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
+        non_intersecting_worksheet = writer.sheets['Non-Intersecting Ceilings']
+        
+        # Apply header format
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'top',
+            'fg_color': '#D7E4BC',
+            'border': 1
+        })
+        
+        for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
+            for col_num, value in enumerate(worksheet.table.columns):
                 worksheet.write(0, col_num, value, header_format)
                 worksheet.set_column(col_num, col_num, 20)  # Set column width
-        else:
-            for col_num, value in enumerate(non_intersecting_df.columns.values):
-                worksheet.write(0, col_num, value, header_format)
-                worksheet.set_column(col_num, col_num, 20)  # Set column width
 
-print(debug_messages)
-print(f"Schedule saved to {output_file_path}")
+    print(debug_messages)
+    print(f"Schedule saved to {output_file_path}")
+
+# Call the main function
+if __name__ == "__main__":
+    main()
