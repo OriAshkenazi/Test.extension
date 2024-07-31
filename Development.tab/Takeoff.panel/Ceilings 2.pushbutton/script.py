@@ -424,10 +424,11 @@ def main():
                 'border': 1
             })
             
-            for worksheet in [pivot_worksheet, non_intersecting_worksheet]:
-                for col_num, value in enumerate(worksheet.table.columns):
+            for worksheet, df in [(pivot_worksheet, pivot_df), (non_intersecting_worksheet, non_intersecting_df)]:
+                for col_num, value in enumerate(df.columns):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 20)  # Set column width
+
         print(f"Schedule saved to {output_file_path}")
     
     except Exception as e:
