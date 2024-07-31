@@ -410,10 +410,12 @@ def main():
         with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
             df_pivoted.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
             df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
+            df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
             
             workbook = writer.book
             pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
             unrelated_worksheet = writer.sheets['Unrelated Ceilings']
+            no_ceiling_worksheet = writer.sheets['Rooms Without Ceilings']
             
             # Apply header format
             header_format = workbook.add_format({
@@ -424,7 +426,7 @@ def main():
                 'border': 1
             })
             
-            for worksheet, df in [(pivot_worksheet, df_pivoted), (unrelated_worksheet, df_unrelated)]:
+            for worksheet, df in [(pivot_worksheet, df_pivoted), (unrelated_worksheet, df_unrelated), (no_ceiling_worksheet, df_rooms_without_ceilings)]:
                 for col_num, value in enumerate(df.columns):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 20)  # Set column width
