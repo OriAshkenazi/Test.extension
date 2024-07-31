@@ -328,38 +328,26 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
 
     return df_relationships, df_unrelated
 
-def pivot_data(df):
+def pivot_data(df_relationships):
     """
-    Pivot the data based on intersecting and non-intersecting ceilings.
-
+    Pivot the relationships data around rooms.
+    
     Args:
-        df (pandas.DataFrame): The input DataFrame containing ceiling data.
-
+        df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
+    
     Returns:
-        tuple: A tuple containing two DataFrames. The first DataFrame contains the pivoted data
-               for intersecting ceilings, and the second DataFrame contains the non-intersecting ceilings.
+        pandas.DataFrame: Pivoted DataFrame with rooms as index and ceiling information as columns.
     """
-    # Separate intersecting and non-intersecting ceilings
-    intersecting_df = df[df['Intersection_Area_sqm'] > 0]
-    non_intersecting_df = df[df['Intersection_Area_sqm'] == 0]
-
-    # Pivot intersecting data
-    pivot_df = intersecting_df.pivot_table(
+    pivoted = df_relationships.pivot_table(
         index=['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID'],
-        values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 'Closest_Ceiling'],
+        values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm'],
         aggfunc='first'
     ).reset_index()
-
-    # Sort pivoted data
-    pivot_df.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'], inplace=True)
-
-    # Ensure non-intersecting DataFrame has correct columns
-    non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 'Closest_Ceiling']]
-
-    # Sort non-intersecting data
-    non_intersecting_df.sort_values(by=['Ceiling_Level', 'Ceiling_Description'], inplace=True)
-
-    return pivot_df, non_intersecting_df
+    
+    # Sort the pivoted DataFrame
+    pivoted = pivoted.sort_values(by=['Room_Building', 'Room_Level', 'Room_Number'])
+    
+    return pivoted
 
 def main():
     """
