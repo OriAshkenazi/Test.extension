@@ -250,8 +250,10 @@ def get_ceiling_details(ceiling):
 
 def custom_sort_key(value):
     """
-    Custom sorting function to handle numeric strings as numbers.
+    Custom sorting function to handle numeric strings as numbers and None values.
     """
+    if value is None:
+        return float('inf')  # This will put None values at the end of the sort order
     try:
         return float(value)
     except ValueError:
@@ -402,7 +404,7 @@ def pivot_data(df_relationships):
         by=['Room_Building', 'Room_Level', 'Room_Number'],
         key=lambda x: x.map(custom_sort_key)
     )
-        
+
     return pivoted
 
 def main():
@@ -415,13 +417,25 @@ def main():
         ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
         # Find the relationships between ceilings and rooms
-        df_relationships, df_unrelated = find_ceiling_room_relationships(room_elements, ceiling_elements)
+        try:
+            df_relationships, df_unrelated = find_ceiling_room_relationships(room_elements, ceiling_elements)
+        except Exception as e:
+            debug_messages.append(f"Error in find_ceiling_room_relationships: {e}")
+            raise
 
         # Pivot the relationships data
-        df_pivoted = pivot_data(df_relationships)
+        try:
+            df_pivoted = pivot_data(df_relationships)
+        except Exception as e:
+            debug_messages.append(f"Error in pivot_data: {e}")
+            raise
 
         # Find rooms without ceilings
-        df_rooms_without_ceilings = find_rooms_without_ceilings(df_relationships, room_elements)
+        try:
+            df_rooms_without_ceilings = find_rooms_without_ceilings(df_relationships, room_elements)
+        except Exception as e:
+            debug_messages.append(f"Error in find_rooms_without_ceilings: {e}")
+            raise
 
         # Output the dataframe with timestamp and formatted Excel
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
