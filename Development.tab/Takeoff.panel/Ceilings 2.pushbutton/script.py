@@ -1,6 +1,7 @@
 #! python3
 
 import clr
+from functools import lru_cache
 clr.AddReference('RevitAPI')
 clr.AddReference('System')
 from Autodesk.Revit.DB import *
@@ -16,26 +17,27 @@ doc = __revit__.ActiveUIDocument.Document
 # Initialize debug messages
 debug_messages = []
 
-def get_element_geometry(element):
-    """
-    Get the geometry of a Revit element.
-    
-    Args:
-        element (Element): The Revit element.
-    
-    Returns:
-        List[Solid] or None: The list of solids representing the geometry of the element, or None if no geometry is found.
-    """
+@lru_cache(maxsize=None)
+def get_element_geometry(element_id):
+    """Memoized function to get the geometry of a Revit element."""
+    element = doc.GetElement(element_id)
     try:
         geom = element.get_Geometry(Options())
         if geom:
             solids = [solid for solid in geom if isinstance(solid, Solid) and solid.Volume > 0]
-            return solids if solids else None
+            return tuple(solids) if solids else None
         return None
     except Exception as e:
         debug_messages.append(f"Error in get_element_geometry: {e}")
         return None
 
+@lru_cache(maxsize=None)
+def get_element_bounding_box(element_id):
+    """Memoized function to get the bounding box of an element."""
+    element = doc.GetElement(element_id)
+    return element.get_BoundingBox(None)
+
+@lru_cache(maxsize=None)
 def project_to_xy_plane(solid):
     """
     Project the lower horizontal face of solid geometry to the XY plane.
@@ -61,7 +63,8 @@ def project_to_xy_plane(solid):
                 return polygon
     return None
 
-def calculate_intersection_area(geom1, geom2):
+@lru_cache(maxsize=None)
+def calculate_intersection_area(geom1_id, geom2_id):
     """
     Calculate the intersecting area between two geometries in sqm.
     
@@ -72,6 +75,9 @@ def calculate_intersection_area(geom1, geom2):
     Returns:
         float: The intersecting area in square meters.
     """
+    geom1 = get_element_geometry(geom1_id)
+    geom2 = get_element_geometry(geom2_id)
+
     intersection_area = 0
 
     try:
@@ -100,6 +106,34 @@ def calculate_intersection_area(geom1, geom2):
         intersection_area = 0
 
     return intersection_area
+
+def check_direct_intersection(room_id, ceiling_id):
+    """Check if there's a direct intersection between room and ceiling geometries."""
+    room_geom = get_element_geometry(room_id)
+    ceiling_geom = get_element_geometry(ceiling_id)
+    for room_solid in room_geom:
+        for ceiling_solid in ceiling_geom:
+            if BooleanOperationsUtils.ExecuteBooleanOperation(room_solid, ceiling_solid, BooleanOperationsType.Intersect).Volume > 0:
+                return True
+    return False
+
+def project_and_check_xy_intersection(room_id, ceiling_id):
+    """Project geometries to XY plane and check for intersection."""
+    room_geom = get_element_geometry(room_id)
+    ceiling_geom = get_element_geometry(ceiling_id)
+    room_polygons = [project_to_xy_plane(solid) for solid in room_geom if solid]
+    ceiling_polygons = [project_to_xy_plane(solid) for solid in ceiling_geom if solid]
+    
+    room_union = unary_union(room_polygons)
+    ceiling_union = unary_union(ceiling_polygons)
+    
+    return room_union.intersects(ceiling_union)
+
+def is_ceiling_above_room(room_id, ceiling_id):
+    """Check if the ceiling is above the room."""
+    room_bb = get_element_bounding_box(room_id)
+    ceiling_bb = get_element_bounding_box(ceiling_id)
+    return ceiling_bb.Min.Z >= room_bb.Max.Z
 
 def get_room_details(room):
     """
@@ -144,67 +178,80 @@ def get_ceiling_details(ceiling):
     return ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
-    """
-    Find the relationship between ceilings and rooms in terms of intersection area.
-    
-    Args:
-        room_elements (list): List of room elements.
-        ceiling_elements (list): List of ceiling elements.
-    
-    Returns:
-        pandas.DataFrame: DataFrame containing the relationship between ceilings and rooms.
-    """
+    """Find the relationship between ceilings and rooms based on the two vectors."""
     relationships = []
+    ceiling_ids = [ceiling.Id for ceiling in ceiling_elements]
 
-    for ceiling in ceiling_elements:
-        ceiling_id, ceiling_type, ceiling_description, ceiling_area, ceiling_level = get_ceiling_details(ceiling)
-        ceiling_geom = get_element_geometry(ceiling)
-        if not ceiling_geom:
-            debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id}")
+    for room in room_elements:
+        room_id = room.Id
+        room_details = get_room_details(room)
+        room_bb = get_element_bounding_box(room_id)
+        
+        if not get_element_geometry(room_id):
+            debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
             continue
         
-        ceiling_has_intersection = False
-        for room in room_elements:
-            room_id, room_name, room_number, room_level, room_building = get_room_details(room)
-            room_geom = get_element_geometry(room)
-            if not room_geom:
-                debug_messages.append(f"No geometry found for room ID: {room_id}")
+        matched_ceilings = []
+        
+        for ceiling_id in ceiling_ids:
+            ceiling = doc.GetElement(ceiling_id)
+            ceiling_details = get_ceiling_details(ceiling)
+            ceiling_bb = get_element_bounding_box(ceiling_id)
+            
+            if not get_element_geometry(ceiling_id):
+                debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
                 continue
-
-            if ceiling.LevelId != room.LevelId:
-                continue
-
-            intersection_area = calculate_intersection_area(room_geom, ceiling_geom)
-            if intersection_area > 0:
-                relationships.append({
-                    'Ceiling_ID': ceiling_id,
-                    'Ceiling_Type': ceiling_type,
-                    'Ceiling_Description': ceiling_description,
-                    'Ceiling_Area_sqm': ceiling_area,
-                    'Ceiling_Level': ceiling_level,
-                    'Room_ID': room_id,
-                    'Room_Name': room_name,
-                    'Room_Number': room_number,
-                    'Room_Level': room_level,
-                    'Room_Building': room_building,
-                    'Intersection_Area_sqm': intersection_area
+            
+            # Check for direct intersection
+            direct_intersection = check_direct_intersection(room_id, ceiling_id)
+            
+            # Check for XY projection intersection and Z-axis proximity
+            xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
+            above_room = is_ceiling_above_room(room_id, ceiling_id)
+            
+            if direct_intersection or (xy_intersection and above_room):
+                intersection_area = calculate_intersection_area(room_id, ceiling_id)
+                matched_ceilings.append({
+                    'Ceiling_ID': ceiling_details[0],
+                    'Ceiling_Type': ceiling_details[1],
+                    'Ceiling_Description': ceiling_details[2],
+                    'Ceiling_Area_sqm': ceiling_details[3],
+                    'Ceiling_Level': ceiling_details[4],
+                    'Room_ID': room_details[0],
+                    'Room_Name': room_details[1],
+                    'Room_Number': room_details[2],
+                    'Room_Level': room_details[3],
+                    'Room_Building': room_details[4],
+                    'Intersection_Area_sqm': intersection_area,
+                    'Direct_Intersection': direct_intersection,
+                    'XY_Projection_Intersection': xy_intersection
                 })
-                ceiling_has_intersection = True
-
-        if not ceiling_has_intersection:
-            relationships.append({
-                'Ceiling_ID': ceiling_id,
-                'Ceiling_Type': ceiling_type,
-                'Ceiling_Description': ceiling_description,
-                'Ceiling_Area_sqm': ceiling_area,
-                'Ceiling_Level': ceiling_level,
-                'Room_ID': None,
-                'Room_Name': None,
-                'Room_Number': None,
-                'Room_Level': None,
-                'Room_Building': None,
-                'Intersection_Area_sqm': 0
-            })
+        
+        if not matched_ceilings:
+            # If no matching ceilings found, find the closest ceiling above the room
+            closest_ceiling = min((c for c in ceiling_elements if is_ceiling_above_room(room_id, c.Id)), 
+                                  key=lambda c: get_element_bounding_box(c.Id).Min.Z - room_bb.Max.Z, 
+                                  default=None)
+            if closest_ceiling:
+                ceiling_details = get_ceiling_details(closest_ceiling)
+                matched_ceilings.append({
+                    'Ceiling_ID': ceiling_details[0],
+                    'Ceiling_Type': ceiling_details[1],
+                    'Ceiling_Description': ceiling_details[2],
+                    'Ceiling_Area_sqm': ceiling_details[3],
+                    'Ceiling_Level': ceiling_details[4],
+                    'Room_ID': room_details[0],
+                    'Room_Name': room_details[1],
+                    'Room_Number': room_details[2],
+                    'Room_Level': room_details[3],
+                    'Room_Building': room_details[4],
+                    'Intersection_Area_sqm': 0,
+                    'Direct_Intersection': False,
+                    'XY_Projection_Intersection': False,
+                    'Closest_Ceiling': True
+                })
+        
+        relationships.extend(matched_ceilings)
 
     return pd.DataFrame(relationships)
 
@@ -224,7 +271,7 @@ def pivot_data(df):
     non_intersecting_df = df[df['Intersection_Area_sqm'] == 0]
 
     # Pivot intersecting data
-    pivot_df = intersecting_df.pivot_table(index=['Room_Building', 'Room_Level', 'Room_Name', 'Room_Number', 'Room_ID'],
+    pivot_df = intersecting_df.pivot_table(index=['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID'],
                                            values=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm'],
                                            aggfunc='first').reset_index()
 
@@ -255,7 +302,7 @@ df_relationships.fillna('', inplace=True)
 pivot_df, non_intersecting_df = pivot_data(df_relationships)
 
 # Explicitly define columns for both DataFrames
-pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Name', 'Room_Number', 'Room_ID', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm']]
+pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Intersection_Area_sqm']]
 non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 'Intersection_Area_sqm']]
 
 # Output the dataframe with timestamp and formatted Excel
