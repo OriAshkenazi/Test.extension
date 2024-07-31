@@ -385,35 +385,33 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
 
 def pivot_data(df_relationships):
     """
-    Pivot the relationships data around rooms, preserving all ceiling information.
+    Group the relationships data around rooms, preserving all ceiling information in separate rows.
     
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
     
     Returns:
-        pandas.DataFrame: Pivoted DataFrame with rooms as index and ceiling information as columns.
+        pandas.DataFrame: Grouped DataFrame with rooms and all associated ceiling information.
     """
-    # Group by room information and aggregate ceiling data
-    grouped = df_relationships.groupby(['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID']).agg({
-        'Ceiling_ID': lambda x: ', '.join(map(str, x)),
-        'Ceiling_Type': lambda x: ', '.join(set(x)),
-        'Ceiling_Description': lambda x: ', '.join(set(x)),
-        'Ceiling_Area_sqm': 'sum',
-        'Intersection_Area_sqm': 'sum',
-        'Direct_Intersection': lambda x: ', '.join(map(str, x)),
-        'XY_Projection_Intersection': lambda x: ', '.join(map(str, x))
-    }).reset_index()
-    
-    # Add a column for the number of ceilings
-    grouped['Number_of_Ceilings'] = grouped['Ceiling_ID'].apply(lambda x: len(x.split(', ')))
-    
-    # Sort the grouped DataFrame
-    grouped = grouped.sort_values(
-        by=['Room_Building', 'Room_Level', 'Room_Number'],
+    # Sort the DataFrame
+    df_sorted = df_relationships.sort_values(
+        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_ID'],
         key=lambda x: x.map(custom_sort_key)
     )
-
-    return grouped
+    
+    # Add a column for the number of ceilings per room
+    ceilings_per_room = df_sorted.groupby(['Room_ID'])['Ceiling_ID'].transform('count')
+    df_sorted['Ceilings_in_Room'] = ceilings_per_room
+    
+    # Reorder columns for better readability
+    columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID',
+                     'Ceilings_in_Room', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
+                     'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_sqm',
+                     'Direct_Intersection', 'XY_Projection_Intersection']
+    
+    df_grouped = df_sorted[columns_order]
+    
+    return df_grouped
 
 def main():
     """
@@ -433,7 +431,7 @@ def main():
 
         # Pivot the relationships data
         try:
-            df_pivoted = pivot_data(df_relationships)
+            df_grouped = pivot_data(df_relationships)
         except Exception as e:
             debug_messages.append(f"Error in pivot_data: {e}")
             raise
@@ -451,12 +449,12 @@ def main():
 
         # Export to Excel with formatting
         with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
-            df_pivoted.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
+            df_grouped.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
             df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
             df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
             
             workbook = writer.book
-            pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
+            grouped_worksheet = writer.sheets['Ceiling-Room Relationships']
             unrelated_worksheet = writer.sheets['Unrelated Ceilings']
             no_ceiling_worksheet = writer.sheets['Rooms Without Ceilings']
             
@@ -469,7 +467,7 @@ def main():
                 'border': 1
             })
             
-            for worksheet, df in [(pivot_worksheet, df_pivoted), (unrelated_worksheet, df_unrelated), (no_ceiling_worksheet, df_rooms_without_ceilings)]:
+            for worksheet, df in [(grouped_worksheet, df_grouped), (unrelated_worksheet, df_unrelated), (no_ceiling_worksheet, df_rooms_without_ceilings)]:
                 for col_num, value in enumerate(df.columns):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 20)  # Set column width
