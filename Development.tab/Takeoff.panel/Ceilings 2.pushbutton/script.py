@@ -5,6 +5,7 @@ from functools import lru_cache
 clr.AddReference('RevitAPI')
 clr.AddReference('System')
 from Autodesk.Revit.DB import *
+from Autodesk.Revit.DB import BooleanOperationsUtils, BooleanOperationsType
 from Autodesk.Revit.Exceptions import InvalidOperationException
 import pandas as pd
 import datetime
@@ -117,7 +118,9 @@ def calculate_intersection_area(geom1_id, geom2_id):
             if isinstance(intersection, Polygon):
                 intersection_area = intersection.area * 0.092903  # Convert from square feet to square meters
             elif isinstance(intersection, MultiPolygon):
-                intersection_area = sum(p.area for p in intersection) * 0.092903  # Convert from square feet to square meters
+                intersection_area = sum(p.area for p in intersection.geoms) * 0.092903  # Handle MultiPolygon
+            else:
+                intersection_area = 0  # Handle other geometry types or empty intersections
     except Exception as e:
         debug_messages.append(f"Error in calculate_intersection_area: {e}")
         intersection_area = 0
@@ -144,28 +147,28 @@ def check_direct_intersection(room_id, ceiling_id):
                     room_solid, ceiling_solid, BooleanOperationsType.Intersect)
                 if intersection_solid.Volume > 0:
                     return True
-            except Autodesk.Revit.Exceptions.InvalidOperationException:
+            except InvalidOperationException:
                 # If Boolean operation fails, fall back to bounding box check
                 room_bb = room_solid.GetBoundingBox()
                 ceiling_bb = ceiling_solid.GetBoundingBox()
-                if (room_bb.Intersects(ceiling_bb)):
+                if check_bounding_box_intersection(room_bb, ceiling_bb):
                     return True
     return False
 
-def check_bounding_box_intersection(room_id, ceiling_id):
+def check_bounding_box_intersection(bb1, bb2):
     """
-    Check if the bounding boxes of the room and ceiling intersect.
+    Check if two bounding boxes intersect.
     
     Args:
-        room_id (ElementId): The ID of the room element.
-        ceiling_id (ElementId): The ID of the ceiling element.
+        bb1 (BoundingBoxXYZ): First bounding box
+        bb2 (BoundingBoxXYZ): Second bounding box
     
     Returns:
         bool: True if the bounding boxes intersect, False otherwise.
     """
-    room_bb = get_element_bounding_box(room_id)
-    ceiling_bb = get_element_bounding_box(ceiling_id)
-    return room_bb.Intersects(ceiling_bb)
+    return (bb1.Min.X <= bb2.Max.X and bb1.Max.X >= bb2.Min.X and
+            bb1.Min.Y <= bb2.Max.Y and bb1.Max.Y >= bb2.Min.Y and
+            bb1.Min.Z <= bb2.Max.Z and bb1.Max.Z >= bb2.Min.Z)
 
 def project_and_check_xy_intersection(room_id, ceiling_id):
     """
