@@ -333,7 +333,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     
     # Sort the relationships DataFrame
     df_relationships = df_relationships.sort_values(
-        by=['Room_Building', 'Room_Level', 'Room_Number'],
+        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
         key=lambda x: x.map(custom_sort_key)
     )
     
