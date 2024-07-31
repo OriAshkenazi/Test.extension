@@ -359,25 +359,10 @@ def main():
         ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
         # Find the relationships between ceilings and rooms
-        df_relationships = find_ceiling_room_relationships(room_elements, ceiling_elements)
+        df_relationships, df_unrelated = find_ceiling_room_relationships(room_elements, ceiling_elements)
 
-        # Normalize and clean data
-        df_relationships.fillna('', inplace=True)
-
-        # Pivot and sort data
-        pivot_df, non_intersecting_df = pivot_data(df_relationships)
-
-        # Explicitly define columns for both DataFrames
-        pivot_df = pivot_df[['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 
-                            'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 
-                            'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection', 
-                            'Closest_Ceiling']]
-        
-        non_intersecting_df = non_intersecting_df[['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 
-                                                'Ceiling_Area_sqm', 'Ceiling_Level', 'Room_ID', 
-                                                'Room_Name', 'Room_Number', 'Room_Level', 'Room_Building', 
-                                                'Intersection_Area_sqm', 'Direct_Intersection', 
-                                                'XY_Projection_Intersection', 'Closest_Ceiling']]
+        # Pivot the relationships data
+        df_pivoted = pivot_data(df_relationships)
 
         # Output the dataframe with timestamp and formatted Excel
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -385,12 +370,12 @@ def main():
 
         # Export to Excel with formatting
         with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
-            pivot_df.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
-            non_intersecting_df.to_excel(writer, sheet_name='Non-Intersecting Ceilings', index=False)
+            df_pivoted.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
+            df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
             
             workbook = writer.book
             pivot_worksheet = writer.sheets['Ceiling-Room Relationships']
-            non_intersecting_worksheet = writer.sheets['Non-Intersecting Ceilings']
+            unrelated_worksheet = writer.sheets['Unrelated Ceilings']
             
             # Apply header format
             header_format = workbook.add_format({
@@ -401,7 +386,7 @@ def main():
                 'border': 1
             })
             
-            for worksheet, df in [(pivot_worksheet, pivot_df), (non_intersecting_worksheet, non_intersecting_df)]:
+            for worksheet, df in [(pivot_worksheet, df_pivoted), (unrelated_worksheet, df_unrelated)]:
                 for col_num, value in enumerate(df.columns):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 20)  # Set column width
