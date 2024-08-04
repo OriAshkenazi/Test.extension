@@ -83,47 +83,49 @@ def project_to_xy_plane(solid):
 
 @lru_cache(maxsize=None)
 def calculate_intersection_area(geom1_id, geom2_id):
-    """
-    Calculate the intersecting area between two geometries in sqm.
-    
-    Args:
-        geom1_id (ElementId): The ID of the first Revit element.
-        geom2_id (ElementId): The ID of the second Revit element.
-    
-    Returns:
-        float: The intersecting area in square meters.
-    """
     geom1 = get_element_geometry(geom1_id)
     geom2 = get_element_geometry(geom2_id)
 
     intersection_area = 0
 
     try:
-        polygons1 = []
-        for solid in geom1:
-            polygon = project_to_xy_plane(solid)
-            if polygon:
-                polygons1.append(polygon)
-        
-        polygons2 = []
-        for solid in geom2:
-            polygon = project_to_xy_plane(solid)
-            if polygon:
-                polygons2.append(polygon)
+        # Check for direct 3D intersection
+        for solid1 in geom1:
+            for solid2 in geom2:
+                try:
+                    intersection_solid = BooleanOperationsUtils.ExecuteBooleanOperation(
+                        solid1, solid2, BooleanOperationsType.Intersect)
+                    if intersection_solid.Volume > 0:
+                        # Calculate the area of the intersection solid's largest face
+                        largest_face_area = max(face.Area for face in intersection_solid.Faces)
+                        intersection_area = max(intersection_area, largest_face_area * 0.092903)  # Convert to sqm
+                except InvalidOperationException:
+                    pass  # If Boolean operation fails, continue to next check
 
-        if polygons1 and polygons2:
-            union1 = unary_union(polygons1)
-            union2 = unary_union(polygons2)
-            intersection = union1.intersection(union2)
-            if isinstance(intersection, Polygon):
-                intersection_area = intersection.area * 0.092903  # Convert from square feet to square meters
-            elif isinstance(intersection, MultiPolygon):
-                intersection_area = sum(p.area for p in intersection.geoms) * 0.092903  # Handle MultiPolygon
-            else:
-                intersection_area = 0  # Handle other geometry types or empty intersections
+        # If no direct intersection, check XY projection
+        if intersection_area == 0:
+            polygons1 = [project_to_xy_plane(solid) for solid in geom1 if solid]
+            polygons2 = [project_to_xy_plane(solid) for solid in geom2 if solid]
+            
+            if polygons1 and polygons2:
+                union1 = unary_union(polygons1)
+                union2 = unary_union(polygons2)
+                intersection = union1.intersection(union2)
+                if isinstance(intersection, (Polygon, MultiPolygon)):
+                    intersection_area = intersection.area * 0.092903  # Convert to sqm
+
+        # If still no intersection, check bounding box intersection
+        if intersection_area == 0:
+            bb1 = get_element_bounding_box(geom1_id)
+            bb2 = get_element_bounding_box(geom2_id)
+            if check_bounding_box_intersection(bb1, bb2):
+                # Calculate the area of overlap in XY plane
+                x_overlap = min(bb1.Max.X, bb2.Max.X) - max(bb1.Min.X, bb2.Min.X)
+                y_overlap = min(bb1.Max.Y, bb2.Max.Y) - max(bb1.Min.Y, bb2.Min.Y)
+                intersection_area = x_overlap * y_overlap * 0.092903  # Convert to sqm
+
     except Exception as e:
         debug_messages.append(f"Error in calculate_intersection_area: {e}")
-        intersection_area = 0
 
     return intersection_area
 
