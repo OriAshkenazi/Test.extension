@@ -388,86 +388,6 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
 
     return df_rooms_without_ceilings
 
-def create_building_ceiling_type_pivot(df_relationships):
-    """
-    Create a pivot table of building > ceiling type > rooms with intersection area sum and unique room count,
-    allowing for expansion into individual rows.
-    
-    Args:
-        df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
-    
-    Returns:
-        pandas.DataFrame: Pivot table with building, ceiling type, rooms, and intersection areas.
-    """
-    # Sort the DataFrame
-    df_sorted = df_relationships.sort_values(
-        by=['Room_Building', 'Ceiling_Type', 'Room_Number', 'Room_Name'],
-        key=lambda x: x.map(custom_sort_key)
-    )
-    
-    # Group by building, ceiling type, and room to get unique rooms and their intersection areas
-    pivot_table = df_sorted.groupby(['Room_Building', 'Ceiling_Type', 'Room_Number', 'Room_Name', 'Room_ID']).agg({
-        'Intersection_Area_sqm': 'sum'
-    }).reset_index()
-    
-    # Add a column for unique room count (will be 1 for each row in this expanded format)
-    pivot_table['Unique_Room_Count'] = 1
-    
-    # Calculate total intersection area and total unique room count for each building and ceiling type
-    totals = pivot_table.groupby(['Room_Building', 'Ceiling_Type']).agg({
-        'Intersection_Area_sqm': 'sum',
-        'Unique_Room_Count': 'sum'
-    }).reset_index()
-    
-    # Rename columns for clarity
-    totals.columns = ['Room_Building', 'Ceiling_Type', 'Total_Intersection_Area_sqm', 'Total_Unique_Room_Count']
-    
-    # Merge totals back to the main pivot table
-    pivot_table = pivot_table.merge(totals, on=['Room_Building', 'Ceiling_Type'], how='left')
-    
-    # Reorder columns
-    column_order = ['Room_Building', 'Ceiling_Type', 'Total_Intersection_Area_sqm', 'Total_Unique_Room_Count',
-                    'Room_Number', 'Room_Name', 'Room_ID', 'Intersection_Area_sqm', 'Unique_Room_Count']
-    pivot_table = pivot_table[column_order]
-    
-    return pivot_table
-
-def create_gypsum_ceiling_relationships(df_relationships):
-    """
-    Create a DataFrame of rooms intersecting with "תקרת גבס" and their corresponding ceilings.
-    
-    Args:
-        df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
-    
-    Returns:
-        pandas.DataFrame: Rooms with "תקרת גבס" and their corresponding ceilings.
-    """
-    # Filter for rooms that intersect with "תקרת גבס"
-    gypsum_rooms = df_relationships[df_relationships['Ceiling_Description'] == 'תקרת גבס']['Room_ID'].unique()
-    
-    # Filter the original DataFrame for these rooms
-    df_gypsum = df_relationships[df_relationships['Room_ID'].isin(gypsum_rooms)]
-    
-    # Sort the DataFrame
-    df_gypsum_sorted = df_gypsum.sort_values(
-        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
-        key=lambda x: x.map(custom_sort_key)
-    )
-    
-    # Create a new column that will be 1 for "תקרת גבס" and 0 for others
-    df_gypsum_sorted['Is_Gypsum'] = (df_gypsum_sorted['Ceiling_Description'] == 'תקרת גבס').astype(int)
-    
-    # Sort within each room group to have "תקרת גבס" first
-    df_gypsum_final = df_gypsum_sorted.sort_values(
-        by=['Room_ID', 'Is_Gypsum', 'Ceiling_Description'],
-        ascending=[True, False, True]
-    )
-    
-    # Drop the helper column
-    df_gypsum_final = df_gypsum_final.drop(columns=['Is_Gypsum'])
-    
-    return df_gypsum_final
-
 def pivot_data(df_relationships):
     """
     Group the relationships data around rooms, preserving all ceiling information in separate rows.
@@ -488,9 +408,18 @@ def pivot_data(df_relationships):
     ceilings_per_room = df_sorted.groupby(['Room_ID'])['Ceiling_ID'].transform('count')
     df_sorted['Ceilings_in_Room'] = ceilings_per_room
     
+    # Add helper new columns
+    df_grouped['Room'] = df_grouped['Room_Number'] + ' - ' + df_grouped['Room_Name']
+    df_grouped['Has_Gypsum_Ceiling'] = df_grouped.groupby('Room_ID').apply(
+        lambda x: 1 if (x['Ceiling_Description'] == 'תקרת גבס').any() else 0
+    ).reset_index(level=0, drop=True)
+    
+    # Adjust Intersection_Area_sqm
+    df_grouped['Intersection_Area_sqm'] = df_grouped['Intersection_Area_sqm'].apply(lambda x: 0 if x < 1 else x)
+
     # Reorder columns for better readability
-    columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID',
-                     'Ceilings_in_Room', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
+    columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room', 'Room_ID',
+                     'Ceilings_in_Room', 'Has_Gypsum_Ceiling', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
                      'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_sqm',
                      'Direct_Intersection', 'XY_Projection_Intersection']
     
@@ -528,20 +457,6 @@ def main():
             debug_messages.append(f"Error in find_rooms_without_ceilings: {e}")
             raise
 
-        # Create the new pivot table
-        try:
-            df_building_ceiling_pivot = create_building_ceiling_type_pivot(df_relationships)
-        except Exception as e:
-            debug_messages.append(f"Error in create_building_ceiling_type_pivot: {e}")
-            raise
-
-        # Create the gypsum ceiling relationships DataFrame
-        try:
-            df_gypsum_relationships = create_gypsum_ceiling_relationships(df_relationships)
-        except Exception as e:
-            debug_messages.append(f"Error in create_gypsum_ceiling_relationships: {e}")
-            raise
-
         # Output the dataframe with timestamp and formatted Excel
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
@@ -551,15 +466,11 @@ def main():
             df_grouped.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
             df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
             df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
-            df_building_ceiling_pivot.to_excel(writer, sheet_name='Building-Ceiling Type Pivot', index=False)
-            df_gypsum_relationships.to_excel(writer, sheet_name='Gypsum Ceiling Relationships', index=False)
-            
+
             workbook = writer.book
             grouped_worksheet = writer.sheets['Ceiling-Room Relationships']
             unrelated_worksheet = writer.sheets['Unrelated Ceilings']
             no_ceiling_worksheet = writer.sheets['Rooms Without Ceilings']
-            pivot_worksheet = writer.sheets['Building-Ceiling Type Pivot']
-            gypsum_worksheet = writer.sheets['Gypsum Ceiling Relationships']
             
             # Apply header format
             header_format = workbook.add_format({
@@ -570,28 +481,19 @@ def main():
                 'border': 1
             })
             
-            # Apply formats to the pivot worksheet
-            for col_num, value in enumerate(df_building_ceiling_pivot.columns):
-                pivot_worksheet.write(0, col_num, value, header_format)
-                pivot_worksheet.set_column(col_num, col_num, 20)  # Set column width
-            
-            # Add subtotal formula for Intersection_Area_sqm
-            last_row = len(df_building_ceiling_pivot) + 1
-            pivot_worksheet.write_formula(last_row, 7, f'=SUBTOTAL(9,H2:H{last_row})', workbook.add_format({'bold': True}))
-            
-            # Add subtotal formula for Unique_Room_Count
-            pivot_worksheet.write_formula(last_row, 8, f'=SUBTOTAL(9,I2:I{last_row})', workbook.add_format({'bold': True}))
-
             for worksheet, df in [
                 (grouped_worksheet, df_grouped),
                 (unrelated_worksheet, df_unrelated),
                 (no_ceiling_worksheet, df_rooms_without_ceilings),
-                (pivot_worksheet, df_building_ceiling_pivot),
-                (gypsum_worksheet, df_gypsum_relationships)
             ]:
                 for col_num, value in enumerate(df.columns):
                     worksheet.write(0, col_num, value, header_format)
                     worksheet.set_column(col_num, col_num, 20)  # Set column width
+            
+            # Adjust column widths for specific columns in the grouped worksheet
+            grouped_worksheet.set_column('E:E', 30)  # Room column
+            grouped_worksheet.set_column('H:H', 15)  # Has_Gypsum_Ceiling column
+
 
         print(f"Schedule saved to {output_file_path}")
     
