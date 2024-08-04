@@ -273,6 +273,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     relationships = []
     unrelated_ceilings = []
     room_ids = [room.Id for room in room_elements]
+    no_geometry_rooms = []
 
     for ceiling in ceiling_elements:
         ceiling_id = ceiling.Id
@@ -292,7 +293,8 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             room_bb = get_element_bounding_box(room_id)
             
             if not get_element_geometry(room_id):
-                debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
+                if room_id not in no_geometry_rooms:
+                    no_geometry_rooms.append(room)
                 continue
             
             # Check for direct intersection
@@ -328,6 +330,10 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         else:
             unrelated_ceilings.append(ceiling_details)
 
+    for room in no_geometry_rooms:
+        room_details = get_room_details(room)
+        debug_messages.append(f"No geometry found for room ID: {room_details[0]}")
+    
     df_relationships = pd.DataFrame(relationships)
     df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
     
