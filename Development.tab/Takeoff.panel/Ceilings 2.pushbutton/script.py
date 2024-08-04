@@ -415,9 +415,9 @@ def pivot_data(df_relationships):
     
     # Add helper new columns
     df_sorted['Room'] = df_sorted['Room_Number'] + ' - ' + df_sorted['Room_Name']
-    df_sorted['Has_Gypsum_Ceiling'] = df_sorted.groupby('Room_ID').apply(
-        lambda x: 1 if (x['Ceiling_Description'] == 'תקרת גבס').any() else 0
-    ).reset_index(level=0, drop=True)
+    df_sorted['Has_Gypsum_Ceiling'] = df_sorted.groupby('Room_ID')['Ceiling_Description'].transform(
+        lambda x: 1 if (x == 'תקרת גבס').any() else 0
+    )
     
     # Adjust Intersection_Area_sqm
     df_sorted['Intersection_Area_sqm'] = df_sorted['Intersection_Area_sqm'].apply(lambda x: 0 if x < 1 else x)
@@ -431,43 +431,6 @@ def pivot_data(df_relationships):
     df_grouped = df_sorted[columns_order]
     
     return df_grouped
-
-# def adjust_gypsum_ceiling_relationships_pivot(wb, source_sheet_name):
-#     ws_pivot = wb["Gypsum Ceiling Relationships"]
-#     pivot_table = ws_pivot._pivots[0]  # Get the existing pivot table
-    
-#     # Update pivot table source range
-#     ws_data = wb[source_sheet_name]
-#     data_range = f"{source_sheet_name}!A1:{get_column_letter(ws_data.max_column)}{ws_data.max_row}"
-#     pivot_table.cache.cacheSource.worksheetSource.ref = data_range
-    
-#     # Set fields
-#     pivot_table.rows = ["Room_Building", "Room"]
-#     pivot_table.columns = ["Ceiling_Description"]
-#     pivot_table.values = [("Intersection_Area_sqm", "Sum")]
-#     pivot_table.filters = ["Has_Gypsum_Ceiling"]
-    
-#     # Set filter to "1" if possible
-#     try:
-#         pivot_table.filters[0].values = [True]
-#     except:
-#         debug_messages.append("Unable to set filter programmatically. Please set it manually in Excel.")
-
-# def adjust_building_ceiling_type_pivot(wb, source_sheet_name):
-#     ws_pivot = wb["Building-Ceiling Type Pivot"]
-#     pivot_table = ws_pivot._pivots[0]  # Get the existing pivot table
-    
-#     # Update pivot table source range
-#     ws_data = wb[source_sheet_name]
-#     data_range = f"{source_sheet_name}!A1:{get_column_letter(ws_data.max_column)}{ws_data.max_row}"
-#     pivot_table.cache.cacheSource.worksheetSource.ref = data_range
-    
-#     # Set fields
-#     pivot_table.rows = ["Room_Building", "Ceiling_Description", "Room", "Room_ID", "Ceiling_ID"]
-#     pivot_table.values = [
-#         ("Intersection_Area_sqm", "Sum"),
-#         ("Ceiling_ID", "Count")
-#     ]
 
 def adjust_column_widths(ws):
     for column in ws.columns:
@@ -522,57 +485,40 @@ def main():
             debug_messages.append(f"Error in find_rooms_without_ceilings: {e}")
             raise
         
-        # # Load the template workbook
-        # template_loaded = False
-        # try:
-        #     template_path = "C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_template.xlsx"
-        #     wb = load_workbook(template_path)
-        #     template_loaded = True
-        # except Exception as e:
-        #     debug_messages.append(f"Error in loading template workbook: {e}")
-        #     wb = Workbook()
-        #     wb.create_sheet("Ceiling-Room Relationships")
-        #     wb.create_sheet("Unrelated Ceilings")
-        #     wb.create_sheet("Rooms Without Ceilings")
-        #     # Remove the default sheet created by Workbook()
-        #     wb.remove(wb['Sheet'])
-
+        # Output the dataframe to Excel with timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
 
-        # Export to Excel with formatting
-        with pd.ExcelWriter(output_file_path, engine='openpyxl') as writer:  
-            df_relationships.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
-            df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
-            df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
+        try:
+            # Export to Excel with formatting
+            with pd.ExcelWriter(output_file_path, engine='xlsxwriter') as writer:
+                df_grouped.to_excel(writer, sheet_name='Ceiling-Room Relationships', index=False)
+                df_unrelated.to_excel(writer, sheet_name='Unrelated Ceilings', index=False)
+                df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
+                
+                workbook = writer.book
+                grouped_worksheet = writer.sheets['Ceiling-Room Relationships']
+                unrelated_worksheet = writer.sheets['Unrelated Ceilings']
+                no_ceiling_worksheet = writer.sheets['Rooms Without Ceilings']
+                
+            # Load the saved workbook and apply formatting
+            wb = load_workbook(output_file_path)
             
-        # Load the saved workbook and apply formatting
-        wb = load_workbook(output_file_path)
-        
-        # Apply header format
-        for sheet_name in ['Ceiling-Room Relationships', 'Unrelated Ceilings', 'Rooms Without Ceilings']:
-            apply_header_format(wb[sheet_name])
+            # Apply header format
+            for sheet_name in ['Ceiling-Room Relationships', 'Unrelated Ceilings', 'Rooms Without Ceilings']:
+                apply_header_format(wb[sheet_name])
 
-        # # Adjust pivot tables if template was loaded
-        # if template_loaded:
-        #     try:
-        #         adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
-        #     except Exception as e:
-        #         debug_messages.append(f"Error in adjusting gypsum_ceiling_relationships pivot tables: {e}")
-
-        #     try:
-        #         adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
-        #     except Exception as e:
-        #         debug_messages.append(f"Error in adjusting building_ceiling_type pivot tables: {e}")
-
-        # Adjust column widths
-        for sheet in wb.sheetnames:
-            adjust_column_widths(wb[sheet])
+            # Adjust column widths
+            for sheet in wb.sheetnames:
+                adjust_column_widths(wb[sheet])
+        except Exception as e:
+            debug_messages.append(f"Error in saving to Excel: {e}")
+            raise
         
         # Save the workbook
         try:
             wb.save(output_file_path)
-            print(f"Schedule with adjusted pivot tables saved to {output_file_path}")
+            print(f"Schedule saved to {output_file_path}")
         except Exception as e:
             debug_messages.append(f"Error in saving workbook: {e}")
 
