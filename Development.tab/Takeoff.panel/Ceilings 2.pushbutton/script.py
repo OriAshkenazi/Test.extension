@@ -294,7 +294,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             
             if not get_element_geometry(room_id):
                 if room_id not in no_geometry_rooms:
-                    no_geometry_rooms.append(room)
+                    no_geometry_rooms.append(room_id)
                 continue
             
             # Check for direct intersection
@@ -330,9 +330,8 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         else:
             unrelated_ceilings.append(ceiling_details)
 
-    for room in no_geometry_rooms:
-        room_details = get_room_details(room)
-        debug_messages.append(f"No geometry found for room ID: {room_details[0]}")
+    for room_id in no_geometry_rooms:
+        debug_messages.append(f"No geometry found for room ID: {room_id}")
     
     df_relationships = pd.DataFrame(relationships)
     df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
@@ -391,33 +390,45 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
 
 def create_building_ceiling_type_pivot(df_relationships):
     """
-    Create a pivot table of building > ceiling type > rooms with intersection area sum and unique room count.
+    Create a pivot table of building > ceiling type > rooms with intersection area sum and unique room count,
+    allowing for expansion into individual rows.
     
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
     
     Returns:
-        pandas.DataFrame: Pivot table with building, ceiling type, intersection area sum, and unique room count.
+        pandas.DataFrame: Pivot table with building, ceiling type, rooms, and intersection areas.
     """
-    # Group by building, ceiling type, and room ID to get unique rooms
-    df_grouped = df_relationships.groupby(['Room_Building', 'Ceiling_Type', 'Room_ID']).agg({
+    # Sort the DataFrame
+    df_sorted = df_relationships.sort_values(
+        by=['Room_Building', 'Ceiling_Type', 'Room_Number', 'Room_Name'],
+        key=lambda x: x.map(custom_sort_key)
+    )
+    
+    # Group by building, ceiling type, and room to get unique rooms and their intersection areas
+    pivot_table = df_sorted.groupby(['Room_Building', 'Ceiling_Type', 'Room_Number', 'Room_Name', 'Room_ID']).agg({
         'Intersection_Area_sqm': 'sum'
     }).reset_index()
     
-    # Now create the final pivot table
-    pivot_table = df_grouped.groupby(['Room_Building', 'Ceiling_Type']).agg({
+    # Add a column for unique room count (will be 1 for each row in this expanded format)
+    pivot_table['Unique_Room_Count'] = 1
+    
+    # Calculate total intersection area and total unique room count for each building and ceiling type
+    totals = pivot_table.groupby(['Room_Building', 'Ceiling_Type']).agg({
         'Intersection_Area_sqm': 'sum',
-        'Room_ID': 'nunique'  # This gives us the count of unique Room IDs
+        'Unique_Room_Count': 'sum'
     }).reset_index()
     
     # Rename columns for clarity
-    pivot_table.columns = ['Building', 'Ceiling Type', 'Total Intersection Area (sqm)', 'Unique Room Count']
+    totals.columns = ['Room_Building', 'Ceiling_Type', 'Total_Intersection_Area_sqm', 'Total_Unique_Room_Count']
     
-    # Sort the DataFrame
-    pivot_table = pivot_table.sort_values(
-        by=['Building', 'Ceiling Type'],
-        key=lambda x: x.map(custom_sort_key)
-    )
+    # Merge totals back to the main pivot table
+    pivot_table = pivot_table.merge(totals, on=['Room_Building', 'Ceiling_Type'], how='left')
+    
+    # Reorder columns
+    column_order = ['Room_Building', 'Ceiling_Type', 'Total_Intersection_Area_sqm', 'Total_Unique_Room_Count',
+                    'Room_Number', 'Room_Name', 'Room_ID', 'Intersection_Area_sqm', 'Unique_Room_Count']
+    pivot_table = pivot_table[column_order]
     
     return pivot_table
 
@@ -432,23 +443,23 @@ def create_gypsum_ceiling_relationships(df_relationships):
         pandas.DataFrame: Rooms with "תקרת גבס" and their corresponding ceilings.
     """
     # Filter for rooms that intersect with "תקרת גבס"
-    gypsum_rooms = df_relationships[df_relationships['Ceiling_Type'] == 'תקרת גבס']['Room_ID'].unique()
+    gypsum_rooms = df_relationships[df_relationships['Ceiling_Description'] == 'תקרת גבס']['Room_ID'].unique()
     
     # Filter the original DataFrame for these rooms
     df_gypsum = df_relationships[df_relationships['Room_ID'].isin(gypsum_rooms)]
     
     # Sort the DataFrame
     df_gypsum_sorted = df_gypsum.sort_values(
-        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Type'],
+        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
         key=lambda x: x.map(custom_sort_key)
     )
     
     # Create a new column that will be 1 for "תקרת גבס" and 0 for others
-    df_gypsum_sorted['Is_Gypsum'] = (df_gypsum_sorted['Ceiling_Type'] == 'תקרת גבס').astype(int)
+    df_gypsum_sorted['Is_Gypsum'] = (df_gypsum_sorted['Ceiling_Description'] == 'תקרת גבס').astype(int)
     
     # Sort within each room group to have "תקרת גבס" first
     df_gypsum_final = df_gypsum_sorted.sort_values(
-        by=['Room_ID', 'Is_Gypsum', 'Ceiling_Type'],
+        by=['Room_ID', 'Is_Gypsum', 'Ceiling_Description'],
         ascending=[True, False, True]
     )
     
@@ -559,6 +570,18 @@ def main():
                 'border': 1
             })
             
+            # Apply formats to the pivot worksheet
+            for col_num, value in enumerate(df_building_ceiling_pivot.columns):
+                pivot_worksheet.write(0, col_num, value, header_format)
+                pivot_worksheet.set_column(col_num, col_num, 20)  # Set column width
+            
+            # Add subtotal formula for Intersection_Area_sqm
+            last_row = len(df_building_ceiling_pivot) + 1
+            pivot_worksheet.write_formula(last_row, 7, f'=SUBTOTAL(9,H2:H{last_row})', workbook.add_format({'bold': True}))
+            
+            # Add subtotal formula for Unique_Room_Count
+            pivot_worksheet.write_formula(last_row, 8, f'=SUBTOTAL(9,I2:I{last_row})', workbook.add_format({'bold': True}))
+
             for worksheet, df in [
                 (grouped_worksheet, df_grouped),
                 (unrelated_worksheet, df_unrelated),
