@@ -523,8 +523,12 @@ def main():
             raise
         
         # Load the template workbook
-        template_path = "C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_template.xlsx"
-        wb = load_workbook(template_path)
+        try:
+            template_path = "C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_template.xlsx"
+            wb = load_workbook(template_path)
+        except Exception as e:
+            debug_messages.append(f"Error in loading template workbook: {e}")
+            wb = Workbook()
 
         # Export to Excel with formatting
         with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
@@ -541,8 +545,15 @@ def main():
             apply_header_format(wb['Rooms Without Ceilings'])
 
         # Adjust pivot tables
-        adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
-        adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
+        try:
+            adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
+        except Exception as e:
+            debug_messages.append(f"Error in adjusting gypsum_ceiling_relationships pivot tables: {e}")
+
+        try:
+            adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
+        except Exception as e:
+            debug_messages.append(f"Error in adjusting building_ceiling_type pivot tables: {e}")
 
         # Adjust column widths
         for sheet in wb.sheetnames:
