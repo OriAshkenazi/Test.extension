@@ -14,6 +14,7 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -450,7 +451,7 @@ def adjust_gypsum_ceiling_relationships_pivot(wb, source_sheet_name):
     try:
         pivot_table.filters[0].values = [True]
     except:
-        print("Unable to set filter programmatically. Please set it manually in Excel.")
+        debug_messages.append("Unable to set filter programmatically. Please set it manually in Excel.")
 
 def adjust_building_ceiling_type_pivot(wb, source_sheet_name):
     ws_pivot = wb["Building-Ceiling Type Pivot"]
@@ -480,6 +481,16 @@ def adjust_column_widths(ws):
                 pass
         adjusted_width = (max_length + 2) * 1.2
         ws.column_dimensions[column_letter].width = adjusted_width
+
+def apply_header_format(ws):
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+        cell.fill = PatternFill(start_color="D7E4BC", end_color="D7E4BC", fill_type="solid")
+        cell.border = Border(left=Side(style='thin'), 
+                             right=Side(style='thin'), 
+                             top=Side(style='thin'), 
+                             bottom=Side(style='thin'))
+        cell.alignment = Alignment(wrap_text=True, vertical='top')
 
 def main():
     """
@@ -525,14 +536,10 @@ def main():
             df_rooms_without_ceilings.to_excel(writer, sheet_name='Rooms Without Ceilings', index=False)
             
             # Apply header format
-            header_format = workbook.add_format({
-                'bold': True,
-                'text_wrap': True,
-                'valign': 'top',
-                'fg_color': '#D7E4BC',
-                'border': 1
-            })
-            
+            apply_header_format(wb['Ceiling-Room Relationships'])
+            apply_header_format(wb['Unrelated Ceilings'])
+            apply_header_format(wb['Rooms Without Ceilings'])
+
         # Adjust pivot tables
         adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
         adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
@@ -544,8 +551,11 @@ def main():
         # Save the workbook
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
-        wb.save(output_file_path)
-        print(f"Schedule with adjusted pivot tables saved to {output_file_path}")
+        try:
+            wb.save(output_file_path)
+            print(f"Schedule with adjusted pivot tables saved to {output_file_path}")
+        except Exception as e:
+            debug_messages.append(f"Error in saving workbook: {e}")
 
     except Exception as e:
         debug_messages.append(f"Error in main function: {e}")
