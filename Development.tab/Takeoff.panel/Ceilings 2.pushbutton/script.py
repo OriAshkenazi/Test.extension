@@ -12,6 +12,9 @@ import datetime
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
+from openpyxl import load_workbook
+from openpyxl.pivot.table import PivotTable, PivotField
+from openpyxl.pivot.cache import PivotCache
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -429,6 +432,120 @@ def pivot_data(df_relationships):
     
     return df_grouped
 
+def create_gypsum_ceiling_relationships_pivot(wb, source_sheet_name):
+    # Get the source data sheet
+    ws_data = wb[source_sheet_name]
+    
+    # Create a new sheet for the pivot table
+    ws_pivot = wb.create_sheet("Gypsum Ceiling Relationships")
+    
+    # Define the data range for the pivot cache
+    data_range = f"{source_sheet_name}!A1:{ws_data.max_column}{ws_data.max_row}"
+    
+    # Create pivot cache
+    pivot_cache = PivotCache(cacheSource=data_range, cacheType="worksheet")
+    
+    # Create pivot table
+    pivot_table = PivotTable(pivot_cache)
+    
+    # Add title and formatting
+    title_cell = ws_pivot.cell(row=1, column=1, value="Gypsum Ceiling Relationships")
+    title_cell.font = Font(bold=True, size=14)
+    title_cell.alignment = Alignment(horizontal='center')
+    ws_pivot.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    
+    # Set pivot table location dynamically
+    pivot_table.location = ws_pivot.cell(row=3, column=1)
+    
+    # Set row fields
+    pivot_table.rowFields = [
+        PivotField("Room_Building", "Room_Building"),
+        PivotField("Room", "Room")
+    ]
+    
+    # Set column field
+    pivot_table.colFields = [PivotField("Ceiling_Description", "Ceiling_Description")]
+    
+    # Set values field
+    pivot_table.dataFields = [PivotField("Intersection_Area_sqm", "Sum of Intersection_Area_sqm")]
+    
+    # Set page field (filter) and apply the filter
+    has_gypsum_field = PivotField("Has_Gypsum_Ceiling", "Has_Gypsum_Ceiling")
+    pivot_table.pageFields = [has_gypsum_field]
+    has_gypsum_field.items = [("1", "1")]  # This sets the filter to "1"
+    
+    # Add pivot table to the worksheet
+    ws_pivot.add_pivot_table(pivot_table)
+    
+    # Adjust column widths after adding the pivot table
+    for column in ws_pivot.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = (max_length + 2) * 1.2
+        ws_pivot.column_dimensions[column_letter].width = adjusted_width
+
+def create_building_ceiling_type_pivot(wb, source_sheet_name):
+    # Get the source data sheet
+    ws_data = wb[source_sheet_name]
+    
+    # Create a new sheet for the pivot table
+    ws_pivot = wb.create_sheet("Building-Ceiling Type Pivot")
+    
+    # Define the data range for the pivot cache
+    data_range = f"{source_sheet_name}!A1:{ws_data.max_column}{ws_data.max_row}"
+    
+    # Create pivot cache
+    pivot_cache = PivotCache(cacheSource=data_range, cacheType="worksheet")
+    
+    # Create pivot table
+    pivot_table = PivotTable(pivot_cache)
+    
+    # Add title and formatting
+    title_cell = ws_pivot.cell(row=1, column=1, value="Building-Ceiling Type Pivot")
+    title_cell.font = Font(bold=True, size=14)
+    title_cell.alignment = Alignment(horizontal='center')
+    ws_pivot.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4)
+    
+    # Set pivot table location dynamically
+    pivot_table.location = ws_pivot.cell(row=3, column=1)
+    
+    # Set row fields
+    pivot_table.rowFields = [
+        PivotField("Room_Building", "Room_Building"),
+        PivotField("Ceiling_Description", "Ceiling_Description"),
+        PivotField("Room", "Room"),
+        PivotField("Room_ID", "Room_ID"),
+        PivotField("Ceiling_ID", "Ceiling_ID")
+    ]
+    
+    # Set values fields
+    pivot_table.dataFields = [
+        PivotField("Intersection_Area_sqm", "Sum of Intersection_Area_sqm", "sum"),
+        PivotField("Ceiling_ID", "Count of Ceiling_ID", "count")
+    ]
+    
+    # Add pivot table to the worksheet
+    ws_pivot.add_pivot_table(pivot_table)
+    
+    # Adjust column widths after adding the pivot table
+    for column in ws_pivot.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = (max_length + 2) * 1.2
+        ws_pivot.column_dimensions[column_letter].width = adjusted_width
+
 def main():
     """
     Main function to execute the script.
@@ -496,6 +613,17 @@ def main():
             grouped_worksheet.set_column('E:E', 30)  # Room column
             grouped_worksheet.set_column('H:H', 15)  # Has_Gypsum_Ceiling column
 
+        # Create pivot tables
+        wb = load_workbook(output_file_path)
+        
+        # Create the Gypsum Ceiling Relationships pivot table
+        create_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
+
+        # Create the Building-Ceiling Type Pivot table
+        create_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
+        
+        # Save the workbook with pivot tables
+        wb.save(output_file_path)
 
         print(f"Schedule saved to {output_file_path}")
     
