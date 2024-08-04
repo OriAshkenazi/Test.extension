@@ -385,24 +385,23 @@ def find_rooms_without_ceilings(df_relationships, room_elements):
 
 def create_building_ceiling_type_pivot(df_relationships):
     """
-    Create a pivot table of building > ceiling type > rooms with intersection area sum and room count.
+    Create a pivot table of building > ceiling type > rooms with intersection area sum and unique room count.
     
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
     
     Returns:
-        pandas.DataFrame: Pivot table with building, ceiling type, intersection area sum, and room count.
+        pandas.DataFrame: Pivot table with building, ceiling type, intersection area sum, and unique room count.
     """
-    # Group by building, ceiling type, and room to get unique rooms
+    # Group by building, ceiling type, and room ID to get unique rooms
     df_grouped = df_relationships.groupby(['Room_Building', 'Ceiling_Type', 'Room_ID']).agg({
-        'Intersection_Area_sqm': 'sum',
-        'Room_Name': 'first'  # We'll use this to count unique rooms
+        'Intersection_Area_sqm': 'sum'
     }).reset_index()
     
     # Now create the final pivot table
     pivot_table = df_grouped.groupby(['Room_Building', 'Ceiling_Type']).agg({
         'Intersection_Area_sqm': 'sum',
-        'Room_ID': 'count'  # This gives us the count of unique rooms
+        'Room_ID': 'nunique'  # This gives us the count of unique Room IDs
     }).reset_index()
     
     # Rename columns for clarity
