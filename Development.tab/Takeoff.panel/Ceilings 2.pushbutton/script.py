@@ -414,13 +414,13 @@ def pivot_data(df_relationships):
     df_sorted['Ceilings_in_Room'] = ceilings_per_room
     
     # Add helper new columns
-    df_grouped['Room'] = df_grouped['Room_Number'] + ' - ' + df_grouped['Room_Name']
-    df_grouped['Has_Gypsum_Ceiling'] = df_grouped.groupby('Room_ID').apply(
+    df_sorted['Room'] = df_sorted['Room_Number'] + ' - ' + df_sorted['Room_Name']
+    df_sorted['Has_Gypsum_Ceiling'] = df_sorted.groupby('Room_ID').apply(
         lambda x: 1 if (x['Ceiling_Description'] == 'תקרת גבס').any() else 0
     ).reset_index(level=0, drop=True)
     
     # Adjust Intersection_Area_sqm
-    df_grouped['Intersection_Area_sqm'] = df_grouped['Intersection_Area_sqm'].apply(lambda x: 0 if x < 1 else x)
+    df_sorted['Intersection_Area_sqm'] = df_sorted['Intersection_Area_sqm'].apply(lambda x: 0 if x < 1 else x)
 
     # Reorder columns for better readability
     columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room', 'Room_ID',
