@@ -523,15 +523,25 @@ def main():
             raise
         
         # Load the template workbook
+        template_loaded = False
         try:
             template_path = "C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_template.xlsx"
             wb = load_workbook(template_path)
+            template_loaded = True
         except Exception as e:
             debug_messages.append(f"Error in loading template workbook: {e}")
             wb = Workbook()
+            wb.create_sheet("Ceiling-Room Relationships")
+            wb.create_sheet("Unrelated Ceilings")
+            wb.create_sheet("Rooms Without Ceilings")
+            # Remove the default sheet created by Workbook()
+            wb.remove(wb['Sheet'])
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
 
         # Export to Excel with formatting
-        with pd.ExcelWriter(template_path, engine='openpyxl') as writer:
+        with pd.ExcelWriter(output_file_path, engine='openpyxl') as writer:
             writer.book = wb
             writer.sheets = dict((ws.title, ws) for ws in wb.worksheets)
             
@@ -544,24 +554,23 @@ def main():
             apply_header_format(wb['Unrelated Ceilings'])
             apply_header_format(wb['Rooms Without Ceilings'])
 
-        # Adjust pivot tables
-        try:
-            adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
-        except Exception as e:
-            debug_messages.append(f"Error in adjusting gypsum_ceiling_relationships pivot tables: {e}")
+        # Adjust pivot tables if template was loaded
+        if template_loaded:
+            try:
+                adjust_gypsum_ceiling_relationships_pivot(wb, 'Ceiling-Room Relationships')
+            except Exception as e:
+                debug_messages.append(f"Error in adjusting gypsum_ceiling_relationships pivot tables: {e}")
 
-        try:
-            adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
-        except Exception as e:
-            debug_messages.append(f"Error in adjusting building_ceiling_type pivot tables: {e}")
+            try:
+                adjust_building_ceiling_type_pivot(wb, 'Ceiling-Room Relationships')
+            except Exception as e:
+                debug_messages.append(f"Error in adjusting building_ceiling_type pivot tables: {e}")
 
         # Adjust column widths
         for sheet in wb.sheetnames:
             adjust_column_widths(wb[sheet])
         
         # Save the workbook
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
         try:
             wb.save(output_file_path)
             print(f"Schedule with adjusted pivot tables saved to {output_file_path}")
