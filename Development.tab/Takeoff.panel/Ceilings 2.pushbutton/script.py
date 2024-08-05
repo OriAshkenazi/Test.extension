@@ -211,6 +211,12 @@ def is_ceiling_above_room(room_id, ceiling_id):
     ceiling_bb = get_element_bounding_box(ceiling_id)
     return ceiling_bb.Min.Z >= room_bb.Max.Z
 
+def find_parameter_by_partial_name(element, partial_name):
+    for param in element.Parameters:
+        if partial_name.lower() in param.Definition.Name.lower():
+            return param
+    return None
+
 def get_room_details(room):
     """
     Get details of a room.
@@ -227,7 +233,9 @@ def get_room_details(room):
     room_level = doc.GetElement(room.LevelId).Name
     room_building_param = room.LookupParameter("בניין")
     room_building = room_building_param.AsString() if room_building_param else None
-    room_ceiling_finish = room.LookupParameter("ROOM_שם גמר תקרה").AsString() if room.LookupParameter("ROOM_שם גמר תקרה") else None
+    # room_ceiling_finish_param = find_parameter_by_partial_name(room, "גמר תקרה")
+    room_ceiling_finish_param = room.LookupParameter("Room_שם גמר תקרה")
+    room_ceiling_finish = room_ceiling_finish_param.AsString() if room_ceiling_finish_param else None
     return room_id, room_name, room_number, room_level, room_building, room_ceiling_finish
 
 def get_ceiling_details(ceiling):
