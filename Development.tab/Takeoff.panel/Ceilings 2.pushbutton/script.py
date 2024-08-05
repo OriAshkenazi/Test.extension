@@ -227,7 +227,8 @@ def get_room_details(room):
     room_level = doc.GetElement(room.LevelId).Name
     room_building_param = room.LookupParameter("בניין")
     room_building = room_building_param.AsString() if room_building_param else None
-    return room_id, room_name, room_number, room_level, room_building
+    room_ceiling_finish = room.LookupParameter("ROOM_שם גמר תקרה").AsString() if room.LookupParameter("ROOM_שם גמר תקרה") else None
+    return room_id, room_name, room_number, room_level, room_building, room_ceiling_finish
 
 def get_ceiling_details(ceiling):
     """
@@ -318,6 +319,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Ceiling_ID': ceiling_details[0],
                     'Ceiling_Type': ceiling_details[1],
                     'Ceiling_Description': ceiling_details[2],
+                    'Room_Ceiling_Finish': room_details[5],
                     'Ceiling_Area_sqm': ceiling_details[3],
                     'Ceiling_Level': ceiling_details[4],
                     'Room_ID': room_details[0],
@@ -424,9 +426,9 @@ def pivot_data(df_relationships):
 
     # Reorder columns for better readability
     columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room', 'Room_ID',
-                     'Ceilings_in_Room', 'Has_Gypsum_Ceiling', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
-                     'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_sqm',
-                     'Direct_Intersection', 'XY_Projection_Intersection']
+                    'Ceilings_in_Room', 'Has_Gypsum_Ceiling', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
+                    'Room_Ceiling_Finish', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_sqm',
+                    'Direct_Intersection', 'XY_Projection_Intersection']
     
     df_grouped = df_sorted[columns_order]
     
