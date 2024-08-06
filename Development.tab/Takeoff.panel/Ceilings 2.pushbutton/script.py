@@ -286,6 +286,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         ceiling_id = ceiling.Id
         ceiling_details = get_ceiling_details(ceiling)
         
+        # Check if the ceiling has geometry
         if not get_element_geometry(ceiling_id):
             debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
             unrelated_ceilings.append(ceiling_details)
@@ -293,12 +294,13 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             continue
         
         matched_rooms = []
-        intersecting_rooms = []
         
+        # Iterate through all rooms to find intersections with the current ceiling
         for room in room_elements:
             room_id = room.Id
             room_details = get_room_details(room)
             
+            # Skip rooms without valid geometry
             if not get_element_geometry(room_id):
                 if room_id not in no_geometry_rooms:
                     no_geometry_rooms.append(room_id)
@@ -311,17 +313,13 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 debug_messages.append(f"Error in direct intersection check: {e}")
                 direct_intersection = False
             
-            if direct_intersection:
-                intersecting_rooms.append(room_id)
-                xy_intersection = True
-            else:          
-                # Check for XY projection intersection
-                xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
-                if xy_intersection:
-                    intersecting_rooms.append(room_id)
+            # Check for XY projection intersection
+            xy_intersection = direct_intersection or project_and_check_xy_intersection(room_id, ceiling_id)
             
+            # If there's any kind of intersection, calculate the area and add to matched_rooms
             if direct_intersection or xy_intersection:
                 intersection_area = calculate_intersection_area(room_id, ceiling_id)
+                distance = delta_ceiling_above_room(room_id, ceiling_id)
                 matched_rooms.append({
                     'Ceiling_ID': ceiling_details[0],
                     'Ceiling_Type': ceiling_details[1],
@@ -336,58 +334,47 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Room_Building': room_details[4],
                     'Intersection_Area_sqm': intersection_area,
                     'Direct_Intersection': direct_intersection,
-                    'XY_Projection_Intersection': xy_intersection
+                    'XY_Projection_Intersection': xy_intersection,
+                    'Distance': distance
                 })
         
-        # Filter out wrong connections
-        if len(intersecting_rooms) > 1:
-            # Calculate the distance between each room and the ceiling
-            room_distances = [
-                (room_id, delta_ceiling_above_room(room_id, ceiling_id))
-                for room_id in intersecting_rooms
-            ]
-            
+        # Filter and process matched rooms
+        if matched_rooms:
             # Filter out rooms with negative or zero distance
-            positive_distance_rooms = [
-                (room_id, distance) 
-                for room_id, distance in room_distances 
-                if distance > 0
-            ]
+            positive_distance_rooms = [room for room in matched_rooms if room['Distance'] > 0]
             
             if positive_distance_rooms:
                 # Find the smallest positive distance
-                min_positive_distance = min(distance for _, distance in positive_distance_rooms)
+                min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
                 
                 # Get the rooms with the smallest positive distance
                 nearest_rooms = [
-                    room_id 
-                    for room_id, distance in positive_distance_rooms 
-                    if distance == min_positive_distance
+                    room for room in positive_distance_rooms 
+                    if room['Distance'] == min_positive_distance
                 ]
                 
-                # Get the level of the nearest rooms
-                nearest_room_level = doc.GetElement(nearest_rooms[0]).LevelId
-                
-                # Filter matched_rooms to keep only those on the same level as the nearest rooms
-                filtered_rooms = [
-                    room for room in matched_rooms
-                    if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
-                ]
+                # If there's only one nearest room, use it directly
+                if len(nearest_rooms) == 1:
+                    relationships.extend(nearest_rooms)
+                else:
+                    # If multiple nearest rooms, filter by level
+                    nearest_room_level = doc.GetElement(ElementId(nearest_rooms[0]['Room_ID'])).LevelId
+                    filtered_rooms = [
+                        room for room in nearest_rooms
+                        if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
+                    ]
+                    relationships.extend(filtered_rooms)
             else:
                 debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room")
                 unrelated_ceilings.append(ceiling_details)
-                continue
-        else:
-            filtered_rooms = matched_rooms
-        
-        if filtered_rooms:
-            relationships.extend(filtered_rooms)
         else:
             unrelated_ceilings.append(ceiling_details)
 
+    # Collect debug messages for rooms without geometry
     for room_id in no_geometry_rooms:
-        debug_messages.append(f"No geometry found for room ID: {room_id}")
-    
+        debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
+
+    # Create DataFrames from the collected data
     df_relationships = pd.DataFrame(relationships)
     df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
     
