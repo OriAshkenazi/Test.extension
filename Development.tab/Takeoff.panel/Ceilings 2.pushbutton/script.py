@@ -2,19 +2,18 @@
 
 import clr
 from functools import lru_cache
-clr.AddReference('RevitAPI')
-clr.AddReference('System')
-from Autodesk.Revit.DB import *
-from Autodesk.Revit.DB import BooleanOperationsUtils, BooleanOperationsType
-from Autodesk.Revit.Exceptions import InvalidOperationException
 import pandas as pd
 import datetime
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from shapely.geometry import Polygon, MultiPolygon
 from shapely.ops import unary_union
 from shapely.validation import make_valid
-from openpyxl import load_workbook, Workbook
-from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+
+clr.AddReference('RevitAPI')
+clr.AddReference('System')
+from Autodesk.Revit.DB import *
+from Autodesk.Revit.Exceptions import InvalidOperationException
 
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
@@ -196,7 +195,7 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
     
     return room_union.intersects(ceiling_union)
 
-def is_ceiling_above_room(room_id, ceiling_id):
+def delta_ceiling_above_room(room_id, ceiling_id):
     """
     Check if the ceiling is above the room.
     
@@ -205,17 +204,11 @@ def is_ceiling_above_room(room_id, ceiling_id):
         ceiling_id (ElementId): The ID of the ceiling element.
     
     Returns:
-        bool: True if the ceiling is above the room, False otherwise.
+        int: distanse between the ceiling and the room.
     """
     room_bb = get_element_bounding_box(room_id)
     ceiling_bb = get_element_bounding_box(ceiling_id)
-    return ceiling_bb.Min.Z >= room_bb.Max.Z
-
-def find_parameter_by_partial_name(element, partial_name):
-    for param in element.Parameters:
-        if partial_name.lower() in param.Definition.Name.lower():
-            return param
-    return None
+    return ceiling_bb.Min.Z - room_bb.Max.Z
 
 def get_room_details(room):
     """
@@ -286,25 +279,25 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
     """
     relationships = []
     unrelated_ceilings = []
-    room_ids = [room.Id for room in room_elements]
     no_geometry_rooms = []
+    no_geometry_ceilings = []
 
     for ceiling in ceiling_elements:
         ceiling_id = ceiling.Id
         ceiling_details = get_ceiling_details(ceiling)
-        ceiling_bb = get_element_bounding_box(ceiling_id)
         
         if not get_element_geometry(ceiling_id):
             debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
             unrelated_ceilings.append(ceiling_details)
+            no_geometry_ceilings.append(ceiling_id)
             continue
         
         matched_rooms = []
+        intersecting_rooms = []
         
-        for room_id in room_ids:
-            room = doc.GetElement(room_id)
+        for room in room_elements:
+            room_id = room.Id
             room_details = get_room_details(room)
-            room_bb = get_element_bounding_box(room_id)
             
             if not get_element_geometry(room_id):
                 if room_id not in no_geometry_rooms:
@@ -316,10 +309,16 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 direct_intersection = check_direct_intersection(room_id, ceiling_id)
             except Exception as e:
                 debug_messages.append(f"Error in direct intersection check: {e}")
-                direct_intersection = check_bounding_box_intersection(room_id, ceiling_id)
+                direct_intersection = False
             
-            # Check for XY projection intersection
-            xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
+            if direct_intersection:
+                intersecting_rooms.append(room_id)
+                xy_intersection = True
+            else:          
+                # Check for XY projection intersection
+                xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id)
+                if xy_intersection:
+                    intersecting_rooms.append(room_id)
             
             if direct_intersection or xy_intersection:
                 intersection_area = calculate_intersection_area(room_id, ceiling_id)
@@ -340,8 +339,49 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'XY_Projection_Intersection': xy_intersection
                 })
         
-        if matched_rooms:
-            relationships.extend(matched_rooms)
+        # Filter out wrong connections
+        if len(intersecting_rooms) > 1:
+            # Calculate the distance between each room and the ceiling
+            room_distances = [
+                (room_id, delta_ceiling_above_room(room_id, ceiling_id))
+                for room_id in intersecting_rooms
+            ]
+            
+            # Filter out rooms with negative or zero distance
+            positive_distance_rooms = [
+                (room_id, distance) 
+                for room_id, distance in room_distances 
+                if distance > 0
+            ]
+            
+            if positive_distance_rooms:
+                # Find the smallest positive distance
+                min_positive_distance = min(distance for _, distance in positive_distance_rooms)
+                
+                # Get the rooms with the smallest positive distance
+                nearest_rooms = [
+                    room_id 
+                    for room_id, distance in positive_distance_rooms 
+                    if distance == min_positive_distance
+                ]
+                
+                # Get the level of the nearest rooms
+                nearest_room_level = doc.GetElement(nearest_rooms[0]).LevelId
+                
+                # Filter matched_rooms to keep only those on the same level as the nearest rooms
+                filtered_rooms = [
+                    room for room in matched_rooms
+                    if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
+                ]
+            else:
+                debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room")
+                unrelated_ceilings.append(ceiling_details)
+                continue
+        else:
+            filtered_rooms = matched_rooms
+        
+        if filtered_rooms:
+            relationships.extend(filtered_rooms)
         else:
             unrelated_ceilings.append(ceiling_details)
 
