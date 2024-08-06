@@ -60,7 +60,7 @@ def get_element_bounding_box(element_id):
 @lru_cache(maxsize=None)
 def project_to_xy_plane(solid):
     """
-    Project the lower horizontal face of solid geometry to the XY plane.
+    Project the entire solid geometry to the XY plane.
     
     Args:
         solid (Solid): The solid geometry.
@@ -68,27 +68,27 @@ def project_to_xy_plane(solid):
     Returns:
         Polygon or None: The projected polygon on the XY plane, or None if no valid polygon is found.
     """
+    vertices = []
     for face in solid.Faces:
-        normal = face.ComputeNormal(UV(0.5, 0.5))
-        if abs(normal.Z) > 0.99 and normal.Z < 0:  # Check if the face is horizontal and facing down
-            edge_loops = face.GetEdgesAsCurveLoops()
-            for loop in edge_loops:
-                vertices = []
-                for curve in loop:
-                    for point in curve.Tessellate():
-                        vertices.append((point.X, point.Y))
-                polygon = Polygon(vertices)
-                if not polygon.is_valid:
-                    polygon = make_valid(polygon)
-                return polygon
+        edge_loops = face.GetEdgesAsCurveLoops()
+        for loop in edge_loops:
+            for curve in loop:
+                for point in curve.Tessellate():
+                    vertices.append((point.X, point.Y))
+    
+    if vertices:
+        polygon = Polygon(vertices)
+        if not polygon.is_valid:
+            polygon = make_valid(polygon)
+        return polygon
     return None
 
 @lru_cache(maxsize=None)
-def calculate_intersection_area(geom1_id, geom2_id):
+def calculate_intersection_areas(geom1_id, geom2_id):
     geom1 = get_element_geometry(geom1_id)
     geom2 = get_element_geometry(geom2_id)
-
-    intersection_area = 0
+    intersection_area_3d = 0
+    intersection_area_xy = 0
 
     try:
         # Check for direct 3D intersection
@@ -98,38 +98,47 @@ def calculate_intersection_area(geom1_id, geom2_id):
                     intersection_solid = BooleanOperationsUtils.ExecuteBooleanOperation(
                         solid1, solid2, BooleanOperationsType.Intersect)
                     if intersection_solid.Volume > 0:
-                        # Calculate the area of the intersection solid's largest face
-                        largest_face_area = max(face.Area for face in intersection_solid.Faces)
-                        intersection_area = max(intersection_area, largest_face_area * 0.092903)  # Convert to sqm
+                        # Project the intersection solid to XY plane and use envelope
+                        intersection_polygon = project_to_xy_plane(intersection_solid)
+                        if intersection_polygon:
+                            intersection_envelope = intersection_polygon.envelope
+                            intersection_area_3d = max(intersection_area_3d, intersection_envelope.area * 0.092903)
                 except InvalidOperationException:
                     pass  # If Boolean operation fails, continue to next check
 
-        # If no direct intersection, check XY projection
-        if intersection_area == 0:
-            polygons1 = [project_to_xy_plane(solid) for solid in geom1 if solid]
-            polygons2 = [project_to_xy_plane(solid) for solid in geom2 if solid]
+        # Calculate XY projection intersection
+        polygons1 = [project_to_xy_plane(solid) for solid in geom1 if solid]
+        polygons2 = [project_to_xy_plane(solid) for solid in geom2 if solid]
+        
+        polygons1 = [p for p in polygons1 if p is not None]
+        polygons2 = [p for p in polygons2 if p is not None]
+        
+        if polygons1 and polygons2:
+            # Create a single polygon for each geometry, filling in any holes
+            union1 = unary_union(polygons1).envelope
+            union2 = unary_union(polygons2).envelope
             
-            if polygons1 and polygons2:
-                union1 = unary_union(polygons1)
-                union2 = unary_union(polygons2)
+            if union1.intersects(union2):
                 intersection = union1.intersection(union2)
                 if isinstance(intersection, (Polygon, MultiPolygon)):
-                    intersection_area = intersection.area * 0.092903  # Convert to sqm
+                    intersection_area_xy = intersection.area * 0.092903
+                else:
+                    # Handle cases where the intersection might be a line or point
+                    intersection_area_xy = 0
 
-        # If still no intersection, check bounding box intersection
-        if intersection_area == 0:
+        # Bounding box check (as a fallback)
+        if intersection_area_xy == 0:
             bb1 = get_element_bounding_box(geom1_id)
             bb2 = get_element_bounding_box(geom2_id)
             if check_bounding_box_intersection(bb1, bb2):
-                # Calculate the area of overlap in XY plane
                 x_overlap = min(bb1.Max.X, bb2.Max.X) - max(bb1.Min.X, bb2.Min.X)
                 y_overlap = min(bb1.Max.Y, bb2.Max.Y) - max(bb1.Min.Y, bb2.Min.Y)
-                intersection_area = x_overlap * y_overlap * 0.092903  # Convert to sqm
+                intersection_area_xy = x_overlap * y_overlap * 0.092903
 
     except Exception as e:
-        debug_messages.append(f"Error in calculate_intersection_area: {e}")
+        debug_messages.append(f"Error in calculate_intersection_areas: {e}")
 
-    return intersection_area
+    return intersection_area_3d, intersection_area_xy
 
 def check_direct_intersection(room_id, ceiling_id):
     """
@@ -187,8 +196,15 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
     """
     room_geom = get_element_geometry(room_id)
     ceiling_geom = get_element_geometry(ceiling_id)
+    
     room_polygons = [project_to_xy_plane(solid) for solid in room_geom if solid]
     ceiling_polygons = [project_to_xy_plane(solid) for solid in ceiling_geom if solid]
+    
+    room_polygons = [p for p in room_polygons if p is not None]
+    ceiling_polygons = [p for p in ceiling_polygons if p is not None]
+    
+    if not room_polygons or not ceiling_polygons:
+        return False
     
     room_union = unary_union(room_polygons)
     ceiling_union = unary_union(ceiling_polygons)
@@ -293,7 +309,8 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             no_geometry_ceilings.append(ceiling_id)
             continue
         
-        matched_rooms = []
+        direct_intersections = []
+        xy_intersections = []
         
         # Iterate through all rooms to find intersections with the current ceiling
         for room in room_elements:
@@ -318,9 +335,9 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             
             # If there's any kind of intersection, calculate the area and add to matched_rooms
             if direct_intersection or xy_intersection:
-                intersection_area = calculate_intersection_area(room_id, ceiling_id)
+                intersection_area_3d, intersection_area_xy = calculate_intersection_areas(room_id, ceiling_id)
                 distance = delta_ceiling_above_room(room_id, ceiling_id)
-                matched_rooms.append({
+                room_data = {
                     'Ceiling_ID': ceiling_details[0],
                     'Ceiling_Type': ceiling_details[1],
                     'Ceiling_Description': ceiling_details[2],
@@ -332,59 +349,50 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Room_Number': room_details[2],
                     'Room_Level': room_details[3],
                     'Room_Building': room_details[4],
-                    'Intersection_Area_sqm': intersection_area,
+                    'Intersection_Area_3D_sqm': intersection_area_3d,
+                    'Intersection_Area_XY_sqm': intersection_area_xy,
+                    'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
                     'Direct_Intersection': direct_intersection,
                     'XY_Projection_Intersection': xy_intersection,
                     'Distance': distance
-                })
+                }
+                if direct_intersection:
+                    direct_intersections.append(room_id)
+                    relationships.append(room_data) #immidiatly add direct intersections to the relationships
+                elif xy_intersection:
+                    xy_intersections.append(room_data)
         
-        distances = [(room['Room_ID'], room['Distance']) for room in matched_rooms]
+        # distances = [(room['Room_ID'], room['Distance']) for room in matched_rooms]
 
-        # Filter and process matched rooms
-        if matched_rooms:
-            # Add all directly intersecting rooms to relationships
-            direct_intersections = [room for room in matched_rooms if room['Direct_Intersection']]
-            relationships.extend(direct_intersections)
-
-            # Process XY projection intersections
-            xy_intersections = [room for room in matched_rooms if room['XY_Projection_Intersection'] and not room['Direct_Intersection']]
-            if xy_intersections:
-                # Filter out rooms with negative or zero distance
-                positive_distance_rooms = [room for room in xy_intersections if room['Distance'] > 0]
+        # If there are no direct intersections, process the XY intersections
+        if xy_intersections and not direct_intersections:
+            # Filter out rooms with negative or zero distance
+            positive_distance_rooms = [room for room in xy_intersections if room['Distance'] > 0]
             
-                if positive_distance_rooms:
-                    # Find the smallest positive distance
-                    min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
-                    
-                    # Get the rooms with the smallest positive distance
-                    nearest_rooms = [
-                        room for room in positive_distance_rooms 
-                        if room['Distance'] == min_positive_distance
-                    ]
-                    
-                    # If there's only one nearest room, use it directly
-                    if len(nearest_rooms) == 1:
-                        relationships.extend(nearest_rooms)
-                    else:
-                        # If multiple nearest rooms, filter by level
-                        nearest_room_level = doc.GetElement(ElementId(nearest_rooms[0]['Room_ID'])).LevelId
-                        filtered_rooms = [
-                            room for room in nearest_rooms
-                            if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
-                        ]
-                        relationships.extend(filtered_rooms)
-                else:
-                    debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room; {distances}")
+            if positive_distance_rooms:
+                # Find the smallest positive distance
+                min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
+                room_with_min_distance = min(positive_distance_rooms, key=lambda x: x['Distance'])
+                min_distance_level = doc.GetElement(ElementId(room_with_min_distance['Room_ID'])).LevelId
+                
+                filtered_rooms = [
+                    room for room in positive_distance_rooms
+                    if doc.GetElement(ElementId(room['Room_ID'])).LevelId == min_distance_level
+                ]
+                relationships.extend(filtered_rooms)
+            else:
+                debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room in xy projections")
 
-            # If no rooms intersect with the ceiling, mark the ceiling as unrelated
-            if not any(rel['Ceiling_ID'] == ceiling_details[0] for rel in relationships):
-                unrelated_ceilings.append(ceiling_details)
-        else:
+        # If no rooms intersect with the ceiling, mark the ceiling as unrelated
+        if not direct_intersections and not xy_intersections:
             unrelated_ceilings.append(ceiling_details)
 
     # Collect debug messages for rooms without geometry
     for room_id in no_geometry_rooms:
-        debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue}")
+        room = doc.GetElement(room_id)
+        room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
+        room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
+        debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue} - Room Name: {room_name}, Room Number: {room_number}")
 
     # Create DataFrames from the collected data
     df_relationships = pd.DataFrame(relationships)
@@ -474,8 +482,9 @@ def pivot_data(df_relationships):
     # Reorder columns for better readability
     columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room', 'Room_ID',
                     'Ceilings_in_Room', 'Has_Gypsum_Ceiling', 'Ceiling_ID', 'Ceiling_Type', 'Ceiling_Description',
-                    'Room_Ceiling_Finish', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_sqm',
-                    'Direct_Intersection', 'XY_Projection_Intersection']
+                    'Room_Ceiling_Finish', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_3D_sqm',
+                    'Intersection_Area_XY_sqm', 'Intersection_Area_sqm', 'Direct_Intersection',
+                    'XY_Projection_Intersection', 'Distance']
     
     df_grouped = df_sorted[columns_order]
     
