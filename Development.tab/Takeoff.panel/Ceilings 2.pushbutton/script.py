@@ -314,7 +314,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 direct_intersection = False
             
             # Check for XY projection intersection
-            xy_intersection = direct_intersection or project_and_check_xy_intersection(room_id, ceiling_id)
+            xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
             
             # If there's any kind of intersection, calculate the area and add to matched_rooms
             if direct_intersection or xy_intersection:
@@ -340,32 +340,42 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         
         # Filter and process matched rooms
         if matched_rooms:
-            # Filter out rooms with negative or zero distance
-            positive_distance_rooms = [room for room in matched_rooms if room['Distance'] > 0]
+            # Add all directly intersecting rooms to relationships
+            direct_intersections = [room for room in matched_rooms if room['Direct_Intersection']]
+            relationships.extend(direct_intersections)
+
+            # Process XY projection intersections
+            xy_intersections = [room for room in matched_rooms if room['XY_Projection_Intersection'] and not room['Direct_Intersection']]
+            if xy_intersections:
+                # Filter out rooms with negative or zero distance
+                positive_distance_rooms = [room for room in xy_intersections if room['Distance'] > 0]
             
-            if positive_distance_rooms:
-                # Find the smallest positive distance
-                min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
-                
-                # Get the rooms with the smallest positive distance
-                nearest_rooms = [
-                    room for room in positive_distance_rooms 
-                    if room['Distance'] == min_positive_distance
-                ]
-                
-                # If there's only one nearest room, use it directly
-                if len(nearest_rooms) == 1:
-                    relationships.extend(nearest_rooms)
-                else:
-                    # If multiple nearest rooms, filter by level
-                    nearest_room_level = doc.GetElement(ElementId(nearest_rooms[0]['Room_ID'])).LevelId
-                    filtered_rooms = [
-                        room for room in nearest_rooms
-                        if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
+                if positive_distance_rooms:
+                    # Find the smallest positive distance
+                    min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
+                    
+                    # Get the rooms with the smallest positive distance
+                    nearest_rooms = [
+                        room for room in positive_distance_rooms 
+                        if room['Distance'] == min_positive_distance
                     ]
-                    relationships.extend(filtered_rooms)
-            else:
-                debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room")
+                    
+                    # If there's only one nearest room, use it directly
+                    if len(nearest_rooms) == 1:
+                        relationships.extend(nearest_rooms)
+                    else:
+                        # If multiple nearest rooms, filter by level
+                        nearest_room_level = doc.GetElement(ElementId(nearest_rooms[0]['Room_ID'])).LevelId
+                        filtered_rooms = [
+                            room for room in nearest_rooms
+                            if doc.GetElement(ElementId(room['Room_ID'])).LevelId == nearest_room_level
+                        ]
+                        relationships.extend(filtered_rooms)
+                else:
+                    debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room")
+
+            # If no rooms intersect with the ceiling, mark the ceiling as unrelated
+            if not any(rel['Ceiling_ID'] == ceiling_details[0] for rel in relationships):
                 unrelated_ceilings.append(ceiling_details)
         else:
             unrelated_ceilings.append(ceiling_details)
