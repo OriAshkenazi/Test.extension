@@ -338,6 +338,8 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     'Distance': distance
                 })
         
+        distances = [(room['Room_ID'], room['Distance']) for room in matched_rooms]
+
         # Filter and process matched rooms
         if matched_rooms:
             # Add all directly intersecting rooms to relationships
@@ -372,7 +374,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                         ]
                         relationships.extend(filtered_rooms)
                 else:
-                    debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room")
+                    debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room; {distances}")
 
             # If no rooms intersect with the ceiling, mark the ceiling as unrelated
             if not any(rel['Ceiling_ID'] == ceiling_details[0] for rel in relationships):
