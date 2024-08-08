@@ -378,7 +378,7 @@ def calculate_max_level_heights(doc, building_levels):
         levels = sorted(levels, key=lambda l: l.Elevation)
         
         if len(levels) < 2:
-            max_heights.append(inf)  # If there's only one level or no levels, set max height to inf
+            max_heights.append(float('inf'))  # If there's only one level or no levels, set max height to inf
             continue
         
         max_height = 0
@@ -769,6 +769,9 @@ def main():
         room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
         ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
+        # Collect file name for excel name prefix
+        file_name = doc.PathName.split("\\")[-1].split(".")[0]
+
         # Find the relationships between ceilings and rooms
         try:
             df_relationships, df_unrelated, df_complex_shape = find_ceiling_room_relationships(room_elements, ceiling_elements)
@@ -792,7 +795,7 @@ def main():
         
         # Output the dataframe to Excel with timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\ceiling_room_relationships_{timestamp}.xlsx"
+        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{file_name}_ceiling_room_relationships_{timestamp}.xlsx"
 
         try:
             # Export to Excel with formatting
