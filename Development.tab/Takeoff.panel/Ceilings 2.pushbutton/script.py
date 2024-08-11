@@ -4,6 +4,8 @@ import clr
 import functools
 import traceback
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 import datetime
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
@@ -119,7 +121,6 @@ def project_to_xy_plane(solid, is_ceiling=False):
             debug_messages.append(f"Error creating room polygon: {e}")
             return None
 
-@tracked_lru_cache(maxsize=None)
 def calculate_intersection_areas(room_id, ceiling_id):
     """
     Calculate both 3D and 2D (XY projection) intersection areas between a room and a ceiling.
@@ -208,11 +209,56 @@ def check_direct_intersection(room_id, ceiling_id):
     """
     room_geom = get_element_geometry(room_id)
     ceiling_geom = get_element_geometry(ceiling_id)
+
+    # # Plot the room and ceiling geometries accuratly on the xy plane
+    # fig, ax = plt.subplots()
+    # for room_solid in room_geom:
+    #     for face in room_solid.Faces:
+    #         for loop in face.EdgeLoops:
+    #             for edge in loop:
+    #                 p1 = edge.AsCurve().GetEndPoint(0)
+    #                 p2 = edge.AsCurve().GetEndPoint(1)
+    #                 ax.plot([p1.X, p2.X], [p1.Y, p2.Y], color='blue', linewidth=5)
+    # for ceiling_solid in ceiling_geom:
+    #     for face in ceiling_solid.Faces:
+    #         for loop in face.EdgeLoops:
+    #             for edge in loop:
+    #                 p1 = edge.AsCurve().GetEndPoint(0)
+    #                 p2 = edge.AsCurve().GetEndPoint(1)
+    #                 # make line thicker
+    #                 ax.plot([p1.X, p2.X], [p1.Y, p2.Y], color='red', linewidth=1)
+
+    # plt.axis('equal')
+    # plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_xy.png")
+
+    # # plot the room and ceiling geometries on the yz plane in a new subplot
+    # fig, ax = plt.subplots()
+    # for room_solid in room_geom:
+    #     for face in room_solid.Faces:
+    #         for loop in face.EdgeLoops:
+    #             for edge in loop:
+    #                 p1 = edge.AsCurve().GetEndPoint(0)
+    #                 p2 = edge.AsCurve().GetEndPoint(1)
+    #                 ax.plot([p1.Y, p2.Y], [p1.Z, p2.Z], color='blue', linewidth=5)
+    # for ceiling_solid in ceiling_geom:
+    #     for face in ceiling_solid.Faces:
+    #         for loop in face.EdgeLoops:
+    #             for edge in loop:
+    #                 p1 = edge.AsCurve().GetEndPoint(0)
+    #                 p2 = edge.AsCurve().GetEndPoint(1)
+    #                 ax.plot([p1.Y, p2.Y], [p1.Z, p2.Z], color='red', linewidth=1)
+    
+    # plt.axis('equal')
+    # plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_yz.png")
+
     for room_solid in room_geom:
         for ceiling_solid in ceiling_geom:
             try:
                 intersection_solid = BooleanOperationsUtils.ExecuteBooleanOperation(
                     room_solid, ceiling_solid, BooleanOperationsType.Intersect)
+                # print(f"Intersection volume: {intersection_solid.Volume}")
+                # print(f"Room volume: {room_solid.Volume}")
+                # print(f"Ceiling volume: {ceiling_solid.Volume}")
                 if intersection_solid.Volume > 0:
                     return True
             except InvalidOperationException:
@@ -295,8 +341,10 @@ def delta_ceiling_above_room(room_id, ceiling_id):
     """
     room_bb = get_element_bounding_box(room_id)
     ceiling_bb = get_element_bounding_box(ceiling_id)
+    # print(f"Delta: {ceiling_bb.Min.Z - room_bb.Max.Z}")
     return ceiling_bb.Min.Z - room_bb.Max.Z
 
+@tracked_lru_cache(maxsize=None)
 def get_room_details(room):
     """
     Get details of a room.
@@ -319,6 +367,7 @@ def get_room_details(room):
     room_area = room_area_param.AsDouble() * 0.092903 if room_area_param else None # Convert from square feet to square meters
     return room_id, room_name, room_number, room_level, room_building, room_ceiling_finish, room_area
 
+@tracked_lru_cache(maxsize=None)
 def get_ceiling_details(ceiling):
     """
     Get details of a ceiling.
@@ -390,6 +439,8 @@ def calculate_max_level_heights(doc, building_levels):
         
         max_heights.append(max_height)
     
+    # print(f"Max level heights: {max_heights}")
+
     return max_heights
 
 def find_ceiling_room_relationships(room_elements, ceiling_elements):
@@ -410,11 +461,17 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
         no_geometry_rooms = []
         no_geometry_ceilings = []
 
-        building_A_levels = {ElementId(6533282), ElementId(694), ElementId(6568872)}  # 00, 01A, RF
-        building_B_levels = {ElementId(8968108), ElementId(9048752), ElementId(9057595)}  # B 00, B 01, B RF
-        common_levels = {ElementId(311)}  # -0.5
+        # # C AB:
+        # building_A_levels = {ElementId(6533282), ElementId(694), ElementId(6568872)}  # 00, 01A, RF
+        # building_B_levels = {ElementId(8968108), ElementId(9048752), ElementId(9057595)}  # B 00, B 01, B RF
+        # common_levels = {ElementId(311)}  # -0.5
 
-        building_levels = [building_A_levels, building_B_levels]
+        # S AB:
+        building_A_levels = {}
+        building_B_levels = {}
+        common_levels = {ElementId(2003554), ElementId(13071), ElementId(15913), ElementId(1764693), ElementId(2102106)} # -1, 00, 01, 02, 03
+        
+        building_levels = [building_A_levels, building_B_levels, common_levels]
 
         start_time = datetime.datetime.now() # Start time for performance measurement
 
@@ -451,6 +508,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 # Check for direct intersection
                 try:
                     direct_intersection = check_direct_intersection(room_id, ceiling_id)
+                    # print(f"Direct intersection: {direct_intersection}")
                 except Exception as e:
                     debug_messages.append(f"Error in direct intersection check: {e}")
                     direct_intersection = False
@@ -470,13 +528,18 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                             'Room_Level': room_details[3],
                             'Room_Building': room_details[4],
                             'Room_Area_sqm (* 1.05)': room_details[6] * 1.05,
+                            'Room_Ceiling_Finish': room_details[5],
                             'Ceiling_ID': ceiling_details[0],
                             'Ceiling_Level': ceiling_details[3],
                             'Ceiling_Description': ceiling_details[1],
                             'Ceiling_Description_Old': ceiling_details[1],
                             'Ceiling_Area_sqm (* 1.3)': ceiling_details[2] * 1.3,
-                            'intersection_area_3d': intersection_area_3d,
-                            'intersection_area_xy': intersection_area_xy
+                            'Intersection_Area_3D_sqm': intersection_area_3d,
+                            'Intersection_Area_XY_sqm': intersection_area_xy,
+                            'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
+                            'Direct_Intersection': direct_intersection,
+                            'XY_Projection_Intersection': xy_intersection,
+                            'Distance': distance
                         })
                         continue  # Skip adding to relationships
                     room_data = {
@@ -521,7 +584,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             # If there are no direct intersections, process the XY intersections
             if xy_intersections:
                 # Filter out rooms with negative or zero distance
-                positive_distance_rooms = [room for room in xy_intersections if room['Distance'] > 0]
+                positive_distance_rooms = [room for room in xy_intersections if room['Distance'] >= 0]
                 # Calculate level distances once
                 level_distances = calculate_max_level_heights(doc, building_levels)
 
@@ -546,6 +609,10 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                         if room['Room_Building'] == "B":
                             # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[1]}")
                             if room['Distance'] <= level_distances[1]:
+                                leveled_rooms.append(room)
+                        else:
+                            # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[2]}")
+                            if room['Distance'] <= level_distances[2]:
                                 leveled_rooms.append(room)
                     
                     if not leveled_rooms:
@@ -620,6 +687,7 @@ def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shap
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
         room_elements (list): List of all room elements.
+        df_complex_shape_rooms (pandas.DataFrame): DataFrame containing complex shape rooms.
     
     Returns:
         pandas.DataFrame: DataFrame containing rooms without ceilings.
@@ -646,7 +714,7 @@ def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shap
         
         rooms_without_ceilings_dict = {room['Room_ID']: room for room in rooms_without_ceilings}
 
-        # add a unique metion for each complex shape room
+        # Add a unique mention for each complex shape room
         for index, row in df_complex_shape_rooms.iterrows():
             room_id = row['Room_ID']
             if room_id not in rooms_without_ceilings_dict:
@@ -656,7 +724,7 @@ def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shap
                     'Room_Level': row['Room_Level'],
                     'Room_Number': row['Room_Number'],
                     'Room_Name': row['Room_Name'],
-                    'Room_Area_sqm': row['Room_Area_sqm (* 1.05)'] / 1.05,
+                    'Room_Area_sqm': row['Room_Area_sqm'] if 'Room_Area_sqm' in row else (row['Room_Area_sqm (* 1.05)'] / 1.05 if 'Room_Area_sqm (* 1.05)' in row else None),
                     'Room_ID': row['Room_ID']
                 }
             else:
@@ -678,44 +746,68 @@ def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shap
 def pivot_data(df_relationships):
     """
     Group the relationships data around rooms, preserving all ceiling information in separate rows.
-    
+    Handles DataFrames that may not contain all expected columns.
+   
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
-    
+   
     Returns:
         pandas.DataFrame: Grouped DataFrame with rooms and all associated ceiling information.
     """
-    # Sort the DataFrame
-    if not df_relationships.empty:
-        df_sorted = df_relationships.sort_values(
-            by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_ID'],
-            key=lambda x: x.map(custom_sort_key)
-        )
-    else:
-        return df_relationships
+    # Define all expected columns
+    expected_columns = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room_ID', 'Room_Area_sqm',
+                        'Ceiling_ID', 'Ceiling_Description', 'Room_Ceiling_Finish', 'Ceiling_Area_sqm',
+                        'Ceiling_Level', 'Intersection_Area_3D_sqm', 'Intersection_Area_XY_sqm',
+                        'Intersection_Area_sqm', 'Direct_Intersection', 'XY_Projection_Intersection',
+                        'Distance', 'Ceiling_Description_Old']
     
+    # Add missing columns with NaN values
+    for col in expected_columns:
+        if col not in df_relationships.columns:
+            df_relationships[col] = np.nan
+    
+    # Handle 'Room_Area_sqm (* 1.05)' column if present
+    if 'Room_Area_sqm (* 1.05)' in df_relationships.columns:
+        df_relationships['Room_Area_sqm'] = df_relationships['Room_Area_sqm (* 1.05)'] / 1.05
+        df_relationships.drop('Room_Area_sqm (* 1.05)', axis=1, inplace=True)
+    
+    # Handle 'Ceiling_Area_sqm (* 1.3)' column if present
+    if 'Ceiling_Area_sqm (* 1.3)' in df_relationships.columns:
+        df_relationships['Ceiling_Area_sqm'] = df_relationships['Ceiling_Area_sqm (* 1.3)'] / 1.3
+        df_relationships.drop('Ceiling_Area_sqm (* 1.3)', axis=1, inplace=True)
+    
+    # If DataFrame is empty, return it with all expected columns
+    if df_relationships.empty:
+        return pd.DataFrame(columns=expected_columns + ['Room', 'Ceilings_in_Room', 'Has_Gypsum_Ceiling'])
+    
+    # Sort the DataFrame
+    df_sorted = df_relationships.sort_values(
+        by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_ID'],
+        key=lambda x: x.map(custom_sort_key)
+    )
+   
     # Add a column for the number of ceilings per room
     ceilings_per_room = df_sorted.groupby(['Room_ID'])['Ceiling_ID'].transform('count')
     df_sorted['Ceilings_in_Room'] = ceilings_per_room
-    
+   
     # Add helper new columns
-    df_sorted['Room'] = df_sorted['Room_Number'] + ' - ' + df_sorted['Room_Name']
+    df_sorted['Room'] = df_sorted['Room_Number'].fillna('') + ' - ' + df_sorted['Room_Name'].fillna('')
     df_sorted['Has_Gypsum_Ceiling'] = df_sorted.groupby('Room_ID')['Ceiling_Description'].transform(
         lambda x: 1 if (x == 'תקרת גבס').any() else 0
     )
-    
+   
     # Adjust Intersection_Area_sqm
-    df_sorted['Intersection_Area_sqm'] = df_sorted['Intersection_Area_sqm'].apply(lambda x: 0 if x < 1 else x)
-
+    df_sorted['Intersection_Area_sqm'] = df_sorted['Intersection_Area_sqm'].apply(lambda x: 0 if pd.notna(x) and x <= 0.36 else x)
+    
     # Reorder columns for better readability
     columns_order = ['Room_Building', 'Room_Level', 'Room_Number', 'Room_Name', 'Room', 'Room_ID', 'Room_Area_sqm',
                     'Ceilings_in_Room', 'Has_Gypsum_Ceiling', 'Ceiling_ID', 'Ceiling_Description',
                     'Room_Ceiling_Finish', 'Ceiling_Area_sqm', 'Ceiling_Level', 'Intersection_Area_3D_sqm',
                     'Intersection_Area_XY_sqm', 'Intersection_Area_sqm', 'Direct_Intersection',
-                    'XY_Projection_Intersection', 'Distance']
-    
+                    'XY_Projection_Intersection', 'Distance', 'Ceiling_Description_Old']
+   
     df_grouped = df_sorted[columns_order]
-    
+   
     return df_grouped
 
 def adjust_column_widths(ws):
@@ -769,8 +861,13 @@ def main():
         room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
         ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
+        # For testing purposes, use a subset of rooms and ceilings
+        # room_elements = [doc.GetElement(ElementId(2020995))]
+        # ceiling_elements = [doc.GetElement(ElementId(2545881))]
+
         # Collect file name for excel name prefix
-        file_name = doc.PathName.split("\\")[-1].split(".")[0]
+        file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
+        prefix = f"{file_name[0]}_{file_name[1]}"
 
         # Find the relationships between ceilings and rooms
         try:
@@ -783,7 +880,14 @@ def main():
         try:
             df_grouped = pivot_data(df_relationships)
         except Exception as e:
-            debug_messages.append(f"Error in pivot_data: {e}")
+            debug_messages.append(f"Error in pivot_data (relationships): {e}")
+            raise
+
+        # Pivot the complex shape rooms data
+        try:
+            df_complex_shape = pivot_data(df_complex_shape)
+        except Exception as e:
+            debug_messages.append(f"Error in pivot_data (complex shape rooms): {e}")
             raise
 
         # Find rooms without ceilings
@@ -795,7 +899,7 @@ def main():
         
         # Output the dataframe to Excel with timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{file_name}_ceiling_room_relationships_{timestamp}.xlsx"
+        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{prefix}_ceiling_room_relationships_{timestamp}.xlsx"
 
         try:
             # Export to Excel with formatting

@@ -4,6 +4,8 @@ import clr
 clr.AddReference('RevitAPI')
 from Autodesk.Revit.DB import *
 
+doc = __revit__.ActiveUIDocument.Document
+
 def print_level_names_and_ids(doc):
     # Collect all levels in the document
     levels = FilteredElementCollector(doc).OfClass(Level).ToElements()
@@ -18,4 +20,7 @@ def print_level_names_and_ids(doc):
         id = level.Id.IntegerValue
         print(f"('{name}', {id})")
 
+
 print_level_names_and_ids(__revit__.ActiveUIDocument.Document)
+
+print(doc.PathName)
