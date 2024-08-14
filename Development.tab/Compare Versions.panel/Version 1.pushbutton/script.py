@@ -5,12 +5,13 @@ import os
 import sys
 import time
 import traceback
+import io
 from collections import defaultdict
-from functools import wraps
+from functools import wraps, lru_cache
 
 clr.AddReference('RevitAPI')
 clr.AddReference('RevitAPIUI')
-from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId, Wall, Floor, Ceiling, FamilyInstance, Area, LocationCurve, RoofBase
+from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId, Wall, Floor, Ceiling, FamilyInstance, Area, LocationCurve, RoofBase, UnitUtils, DisplayUnitType
 from Autodesk.Revit.UI import *
 from System.Windows.Forms import FolderBrowserDialog, DialogResult
 from System.Collections.Generic import List
@@ -24,49 +25,54 @@ import datetime
 uidoc = __revit__.ActiveUIDocument
 doc = uidoc.Document
 
+# List to keep track of all LRU cached functions
+lru_cached_functions = []
+
+def tracked_lru_cache(*args, **kwargs):
+    def decorator(func):
+        cached_func = lru_cache(*args, **kwargs)(func)
+        lru_cached_functions.append(cached_func)
+        return cached_func
+    return decorator
+
+def clear_all_lru_caches():
+    for func in lru_cached_functions:
+        func.cache_clear()
+
 def progress_tracker(total_elements):
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             start_time = time.time()
-            last_update_time = start_time
             estimated_times = []
             use_estimated_time = False
-            
+           
             def update_progress(i, force_print=False):
-                nonlocal last_update_time, use_estimated_time
-                
+                nonlocal use_estimated_time
+               
                 current_time = time.time()
                 total_elapsed_time = current_time - start_time
                 progress = i / total_elements * 100
-                
+               
                 if i > 1:  # Skip estimation for the first element
                     estimated_time_remaining = (total_elapsed_time / i) * (total_elements - i)
                     estimated_times.append(estimated_time_remaining)
-                    
-                    # Check negative gradient over last 300 elements
-                    if len(estimated_times) >= 300:
-                        if all(estimated_times[-j] < estimated_times[-j-1] for j in range(1, 300)) and not use_estimated_time:
+                   
+                    # Check negative gradient over last 800 elements
+                    if len(estimated_times) >= 800:
+                        if all(estimated_times[-j] < estimated_times[-j-1] + 0.5 for j in range(1, 800)) and not use_estimated_time:
                             use_estimated_time = True
                             print("Switching to estimated time remaining...")
-                        estimated_times.pop(0)  # Remove oldest estimate to maintain 300 elements
-                    
-                    if use_estimated_time:
-                        time_remaining = estimated_time_remaining
-                    else:
-                        time_remaining = max(0, 85 - total_elapsed_time)  # Start with 85 seconds
-                    
+                        estimated_times.pop(0)  # Remove oldest estimate to maintain 800 elements
+                   
+                    time_remaining = estimated_time_remaining if use_estimated_time else max(0, 360 - total_elapsed_time)
+                   
                     if force_print or i % 400 == 0 or i == total_elements:
                         print(f"Progress: {progress:.2f}% ({i}/{total_elements} elements) | "
                               f"Time elapsed: {total_elapsed_time:.2f}s | "
                               f"Time remaining: {time_remaining:.2f}s")
-                elif force_print:
-                    print(f"Progress: {progress:.2f}% ({i}/{total_elements} elements) | "
-                          f"Time elapsed: {total_elapsed_time:.2f}s")
-                
-                last_update_time = current_time
 
-            # Create a generator that yields after every element
+            # Create a generator that yields elements
             def element_counter():
                 elements = FilteredElementCollector(args[0]).WhereElementIsNotElementType().ToElements()
                 for i, element in enumerate(elements, 1):
@@ -125,14 +131,15 @@ def get_family_and_type_names(element, doc):
     except Exception as e:
         return "Error Family", "Error Type", "Error Type ID", "Error getting info"
 
+@tracked_lru_cache(maxsize=None)
 def get_additional_type_info(element_type):
     '''
-    Get additional informative parameters for the element type.
+    Get additional information about the element type.
 
     Args:
-        element_type (ElementType): The element type to get information from.
+        element_type (Element): The element type to get additional info for.
     Returns:
-        str: A string containing additional type information.
+        str: A string containing additional information about the element type.
     '''
     if element_type is None:
         return "No additional info"
@@ -144,119 +151,132 @@ def get_additional_type_info(element_type):
         BuiltInParameter.ALL_MODEL_MODEL
     ]
 
+    additional_info = []
     for param in info_params:
         param_value = element_type.get_Parameter(param)
         if param_value and param_value.HasValue:
-            return f"{param_value.Definition.Name}: {param_value.AsString()}"
+            additional_info.append(f"{param_value.Definition.Name}: {param_value.AsString()}")
 
-    return "No additional info"
+    return " | ".join(additional_info) if additional_info else "No additional info"
 
-def safe_get_parameter_value(element, parameter_name):
+def get_all_parameters(element):
     '''
-    Safely get a parameter value from an element.
+    Get all parameters of an element as a list of strings.
 
     Args:
-        element (Element): The Revit element to get the parameter value from.
-        parameter_name (str): The name of the parameter to get.
+        element (Element): The element to get the parameters for.
     Returns:
-        str: The parameter value as a string, or "None" if not found.
+        list: A list of strings containing the parameter names and values.
     '''
+    params = []
     try:
-        param = element.get_Parameter(parameter_name)
-        if param and param.HasValue:
-            return param.AsString() or param.AsValueString()
-        return getattr(element, parameter_name, None)
-    except:
-        return None
+        for param in element.Parameters:
+            try:
+                if param.HasValue:
+                    value = param.AsValueString() or param.AsString() or str(param.AsDouble())
+                else:
+                    value = "No Value"
+                params.append(f"{param.Definition.Name}: {value}")
+            except Exception as e:
+                params.append(f"{param.Definition.Name}: Error - {str(e)}")
+    except Exception as e:
+        params.append(f"Error getting parameters: {str(e)}")
+    return params
 
 def calculate_element_metrics(element, doc):
-    """
-    Calculate area, length, and volume for applicable elements using a robust approach compatible with Revit 2019.
-   
+    '''
+    Calculate the area, volume, and length of an element.
+
     Args:
-        element (Element): The Revit element to calculate metrics for.
-        doc (Document): The current Revit document.
+        element (Element): The element to calculate the metrics for.
+        doc (Document): The Revit document.
     Returns:
-        tuple: A tuple containing the calculated metrics (area, length, volume) and any error messages.
-    """
+        dict: A dictionary containing the calculated metrics.
+        list: A list of strings containing debug information.
+    '''
     metrics = {'area': 0.0, 'length': 0.0, 'volume': 0.0}
-    errors = []
+    debug_info = [f"Element ID: {element.Id.IntegerValue}"]
    
     try:
         category = element.Category
-        category_id = category.Id.IntegerValue if category else -1
+        if category:
+            debug_info.append(f"Category: {category.Name}")
+            category_id = category.Id.IntegerValue
+        else:
+            debug_info.append("Category: None")
+            category_id = -1
 
-        def get_param_value(param, default=0.0):
-            if isinstance(param, BuiltInParameter):
-                param = element.get_Parameter(param)
-            return param.AsDouble() if param and param.HasValue else default
+        # Try to get general parameters first
+        area_param = element.get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)
+        volume_param = element.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)
+        
+        if area_param and area_param.HasValue:
+            metrics['area'] = area_param.AsDouble()
+        if volume_param and volume_param.HasValue:
+            metrics['volume'] = volume_param.AsDouble()
 
         # Specific element handling
         if isinstance(element, Wall):
-            metrics['length'] = element.WallLength
-            metrics['area'] = element.WallArea
-            metrics['volume'] = get_param_value(BuiltInParameter.HOST_VOLUME_COMPUTED)
-            if element.WallType.Kind == WallKind.Curtain:
-                curtain_grid = element.CurtainGrid
-                if curtain_grid:
-                    for grid_line in curtain_grid.GetUGridLines() + curtain_grid.GetVGridLines():
-                        metrics['length'] += grid_line.FullCurve.Length
-        elif isinstance(element, Floor) or isinstance(element, Ceiling) or isinstance(element, RoofBase):
-            metrics['area'] = get_param_value(BuiltInParameter.HOST_AREA_COMPUTED)
-            metrics['volume'] = get_param_value(BuiltInParameter.HOST_VOLUME_COMPUTED)
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
+        elif isinstance(element, (Floor, Ceiling, RoofBase)):
+            pass  # Already handled by general parameters
         elif isinstance(element, FamilyInstance):
-            # This covers Doors, Windows, Furniture, Plumbing Fixtures, Mechanical Equipment, Electrical Fixtures
-            metrics['area'] = get_param_value(BuiltInParameter.HOST_AREA_COMPUTED)
-            metrics['volume'] = get_param_value(BuiltInParameter.HOST_VOLUME_COMPUTED)
-            for param in [BuiltInParameter.FAMILY_HEIGHT_PARAM, BuiltInParameter.FAMILY_WIDTH_PARAM, BuiltInParameter.FAMILY_DEPTH_PARAM]:
-                value = get_param_value(param)
-                if value > 0:
-                    metrics['length'] = max(metrics['length'], value)
-        elif isinstance(element, Area):
-            metrics['area'] = element.Area
+            bbox = element.get_BoundingBox(None)
+            if bbox:
+                metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
         elif category_id == int(BuiltInCategory.OST_Rooms):
-            metrics['area'] = get_param_value(BuiltInParameter.ROOM_AREA)
-            metrics['volume'] = get_param_value(BuiltInParameter.ROOM_VOLUME)
+            room_area_param = element.get_Parameter(BuiltInParameter.ROOM_AREA)
+            room_volume_param = element.get_Parameter(BuiltInParameter.ROOM_VOLUME)
+            if room_area_param and room_area_param.HasValue:
+                metrics['area'] = room_area_param.AsDouble()
+            if room_volume_param and room_volume_param.HasValue:
+                metrics['volume'] = room_volume_param.AsDouble()
         elif category_id == int(BuiltInCategory.OST_Stairs):
-            metrics['length'] = get_param_value(BuiltInParameter.STAIRS_ACTUAL_RUN_WIDTH)
-            metrics['area'] = get_param_value(BuiltInParameter.HOST_AREA_COMPUTED)
+            stair_length_param = element.get_Parameter(BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
+            if stair_length_param and stair_length_param.HasValue:
+                metrics['length'] = stair_length_param.AsDouble()
         elif category_id == int(BuiltInCategory.OST_Railings):
-            metrics['length'] = get_param_value(BuiltInParameter.CURVE_ELEM_LENGTH)
-        else:
-            # Generic approach for other element types
-            metrics['area'] = get_param_value(BuiltInParameter.HOST_AREA_COMPUTED)
-            metrics['volume'] = get_param_value(BuiltInParameter.HOST_VOLUME_COMPUTED)
-            
-            if hasattr(element, 'Location') and isinstance(element.Location, LocationCurve):
-                metrics['length'] = element.Location.Curve.Length
-            else:
-                metrics['length'] = get_param_value(BuiltInParameter.CURVE_ELEM_LENGTH)
-
-        # Fallback to LookupParameter if metrics are still zero
-        if metrics['area'] == 0:
-            metrics['area'] = get_param_value(element.LookupParameter("Area"))
-        if metrics['length'] == 0:
-            metrics['length'] = get_param_value(element.LookupParameter("Length"))
-        if metrics['volume'] == 0:
-            metrics['volume'] = get_param_value(element.LookupParameter("Volume"))
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
 
         # Convert units (assuming input is in imperial units)
-        metrics['area'] *= 0.092903  # sq ft to sq m
-        metrics['volume'] *= 0.0283168  # cu ft to cu m
-        metrics['length'] *= 0.3048  # ft to m
+        metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], DisplayUnitType.DUT_SQUARE_METERS)
+        metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], DisplayUnitType.DUT_CUBIC_METERS)
+        metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], DisplayUnitType.DUT_METERS)
+
+        debug_info.extend(get_all_parameters(element))
+
+        for metric, value in metrics.items():
+            debug_info.append(f"{metric.capitalize()}: {value:.2f}")
 
     except Exception as e:
-        errors.append(f"Error calculating metrics: {str(e)}")
+        debug_info.append(f"Error calculating metrics: {str(e)}")
+        debug_info.append(traceback.format_exc())
 
-    return metrics, errors
+    return metrics, debug_info
 
 @progress_tracker(total_elements=FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount())
 def get_type_metrics(doc, element_counter=None):
-    metrics = defaultdict(lambda: {'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': ''})
+    '''
+    Get the metrics for each unique element type in the document.
+
+    Args:
+        doc (Document): The Revit document.
+        element_counter (generator): A generator that yields elements.
+    Returns:
+        dict: A dictionary containing the metrics for each unique element type.
+        list: A list of strings containing errors encountered during processing.
+        int: The total number of elements processed
+    '''
+    metrics = defaultdict(lambda: {'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 'additional_info': '', 'debug_info': []})
     
     errors = []
     processed_elements = 0
-    for element in (element_counter or FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()):
+    
+    for element in (element_counter or FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()[0:10000]):
         try:
             family_name, type_name, type_id, additional_info = get_family_and_type_names(element, doc)
             key = (family_name, type_name)
@@ -265,84 +285,32 @@ def get_type_metrics(doc, element_counter=None):
             metrics[key]['type_id'] = type_id
             metrics[key]['additional_info'] = additional_info
             
-            element_metrics, local_errors = calculate_element_metrics(element, doc)
+            element_metrics, debug_info = calculate_element_metrics(element, doc)
             
             for metric, value in element_metrics.items():
-                if value is not None:  # Include zero values
-                    metrics[key][metric] += value            
+                if value is not None:
+                    metrics[key][metric] += value
+            
+            if not metrics[key]['debug_info']:
+                metrics[key]['debug_info'] = debug_info
+            
             processed_elements += 1
+
+            # Limit to 5000 elements for testing
+            # if processed_elements >= 5000:
+            #     break
         
         except Exception as e:
-            error_msg = f"Error processing element {element.Id}: {str(e)}"
+            error_msg = f"Error processing element {element.Id}: {str(e)}\n{traceback.format_exc()}"
             if error_msg not in errors:
                 errors.append(error_msg)
-            for err in local_errors:
-                if err not in errors:
-                    errors.append(err)
     
-    print(f"Processed {processed_elements} elements")
-    print("Final metrics:")
-    for key, value in metrics.items():
-        print(f"{key}: {value}")
-    
-    return metrics, errors
-
-def get_element_info(element, doc):
-    '''
-    Get the family name, type name, and type ID of an element.
-
-    Args:
-        element (Element): The element to get information from.
-        doc (Document): The Revit document.
-    Returns:
-        tuple: A tuple containing the family name, type name, and type ID.
-    '''
-    try:
-        element_type = doc.GetElement(element.GetTypeId())
-        category = element.Category
-        
-        family_name = category.Name if category else "No Category"
-        type_name = element_type.get_Parameter(BuiltInParameter.ALL_MODEL_TYPE_NAME).AsString() if element_type else "No Type"
-        type_id = str(element_type.Id.IntegerValue) if element_type else "No Type ID"
-        
-        return family_name, type_name, type_id
-    except:
-        return "Unknown", "Unknown", "Unknown"
-
-def get_element_metrics(element):
-    '''
-    Get the area, volume, and length of an element in metric.
-
-    Args:
-        element (Element): The element to get metrics from.
-    Returns:
-        dict: A dictionary containing the area, volume, and length of the element
-    '''
-    metrics = {'area': 0.0, 'volume': 0.0, 'length': 0.0}
-    
-    params = {
-        'area': [BuiltInParameter.HOST_AREA_COMPUTED, BuiltInParameter.SURFACE_AREA],
-        'volume': [BuiltInParameter.HOST_VOLUME_COMPUTED],
-        'length': [BuiltInParameter.CURVE_ELEM_LENGTH]
-    }
-    
-    for metric, param_list in params.items():
-        for param in param_list:
-            param_value = element.get_Parameter(param)
-            if param_value and param_value.HasValue:
-                metrics[metric] = param_value.AsDouble()
-                break
-    
-    # Convert to metric
-    metrics['area'] *= 0.092903  # sq ft to sq m
-    metrics['volume'] *= 0.0283168  # cu ft to cu m
-    metrics['length'] *= 0.3048  # ft to m
-    
-    return metrics
+    return metrics, errors, processed_elements
 
 def compare_models(current_doc, old_doc_path):
     '''
     Compare the types between the current and old models.
+
     Args:
         current_doc (Document): The current Revit document.
         old_doc_path (str): The path to the old Revit model file.
@@ -353,20 +321,21 @@ def compare_models(current_doc, old_doc_path):
     all_errors = []
 
     print("Processing current model...")
-    current_metrics, current_errors = get_type_metrics(current_doc)
+    current_metrics, current_errors, current_processed = get_type_metrics(current_doc)
     all_errors.extend(current_errors)
+    print(f"Processed {current_processed} elements in the current model.")
 
     print("\nProcessing old model...")
     try:
         old_doc = app.OpenDocumentFile(old_doc_path)
-        old_metrics, old_errors = get_type_metrics(old_doc)
+        old_metrics, old_errors, old_processed = get_type_metrics(old_doc)
         all_errors.extend(old_errors)
+        print(f"Processed {old_processed} elements in the old model.")
         old_doc.Close(False)
     except Exception as e:
         all_errors.append(f"Error opening old document: {str(e)}")
         return [], all_errors
 
-    # Add this check
     if current_metrics is None or old_metrics is None:
         all_errors.append("Error: Failed to process one or both models.")
         return [], all_errors
@@ -385,6 +354,7 @@ def compare_models(current_doc, old_doc_path):
             'Family': family_name,
             'Type': type_name,
             'Type ID': current.get('type_id', 'N/A'),
+            'Additional Info': current.get('additional_info', 'N/A'),
             'Current Count': current['count'],
             'Old Count': old['count'],
             'Count Diff': current['count'] - old['count'],
@@ -399,33 +369,46 @@ def compare_models(current_doc, old_doc_path):
             'Length Diff': current['length'] - old['length']
         })
 
-    return comparison_data, all_errors
+    return comparison_data, all_errors, all_types
 
-def generate_impact_assessment(summary_metrics):
+def compare_models_old(current_doc, old_doc_path):
     '''
-    Generate an impact assessment based on the summary metrics.
+    Compare the types between the current and old models.
 
     Args:
-        summary_metrics (dict): A dictionary containing the summary metrics.
+        current_doc (Document): The current Revit document.
+        old_doc_path (str): The path to the old Revit model file.
     Returns:
-        str: A text describing the potential impact on schedule and budget.
+        tuple: A tuple containing a list of dictionaries with comparison data and a list of errors.
     '''
-    impact_text = "Based on the changes observed:\n\n"
-    
-    if summary_metrics["Count"] > 100 or summary_metrics["Area (sqm)"] > 1000:
-        impact_text += "- The project has grown significantly in size, which may require additional time and resources.\n"
-    elif summary_metrics["Count"] < -50 or summary_metrics["Area (sqm)"] < -500:
-        impact_text += "- The project has decreased in size, which might allow for schedule optimization.\n"
-    
-    if abs(summary_metrics["Volume (cu m)"]) > 100:
-        impact_text += "- Substantial changes in volume may affect material quantities and costs.\n"
-    
-    if abs(summary_metrics["Length (m)"]) > 1000:
-        impact_text += "- Significant changes in linear elements may impact installation time and costs.\n"
-    
-    impact_text += "\nRecommendation: Review the detailed changes and consult with the project team to assess the need for schedule and budget adjustments."
-    
-    return impact_text
+    app = current_doc.Application
+    all_errors = []
+
+    print("Processing current model...")
+    current_metrics, current_errors, current_processed = get_type_metrics(current_doc)
+    all_errors.extend(current_errors)
+    print(f"Processed {current_processed} elements in the current model.")
+
+    print("\nProcessing old model...")
+    try:
+        old_doc = app.OpenDocumentFile(old_doc_path)
+        old_metrics, old_errors, old_processed = get_type_metrics(old_doc)
+        all_errors.extend(old_errors)
+        print(f"Processed {old_processed} elements in the old model.")
+        old_doc.Close(False)
+    except Exception as e:
+        all_errors.append(f"Error opening old document: {str(e)}")
+        return [], all_errors
+
+    if current_metrics is None or old_metrics is None:
+        all_errors.append("Error: Failed to process one or both models.")
+        return [], all_errors
+
+    all_types = set(current_metrics.keys()) | set(old_metrics.keys())
+
+    comparison_data = [current_metrics, old_metrics]
+
+    return comparison_data, all_errors, all_types
 
 def create_excel_report(comparison_data, output_path):
     '''
@@ -440,17 +423,16 @@ def create_excel_report(comparison_data, output_path):
     wb = openpyxl.Workbook()
     ws_details = wb.active
     ws_details.title = "Type Comparison Details"
-    ws_summary = wb.create_sheet("Summary")
     
     headers = [
         "Family", "Type", "Type ID", "Additional Info",
         "Current Count", "Old Count", "Count Diff",
         "Current Area (sqm)", "Old Area (sqm)", "Area Diff (sqm)",
-        "Current Volume (cu m)", "Old Volume (cu m)", "Volume Diff (cu m)",
-        "Current Length (m)", "Old Length (m)", "Length Diff (m)"
+        "Current Vol (cu m)", "Old Vol (cu m)", "Vol Diff (cu m)",
+        "Current Len (m)", "Old Len (m)", "Len Diff (m)"
     ]
     
-    sorted_comparison_data = sorted(comparison_data, key=lambda x: safe_sort_key((x.get('Family'), x.get('Type'))))
+    # sorted_comparison_data = sorted(comparison_data, key=lambda x: safe_sort_key((x.get('Family'), x.get('Type'))))
 
     # Populate details worksheet
     for col, header in enumerate(headers, start=1):
@@ -458,12 +440,41 @@ def create_excel_report(comparison_data, output_path):
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='center')
     
-    for row, data in enumerate(sorted_comparison_data, start=2):
-        for col, key in enumerate(headers, start=1):
-            value = data.get(key, "")
-            cell = ws_details.cell(row=row, column=col, value=value)
-            if isinstance(value, float):
-                cell.number_format = '0.00'
+    # 'Family': family_name,
+    # 'Type': type_name,
+    # 'Type ID': current.get('type_id', 'N/A'),
+    # 'Additional Info': current.get('additional_info', 'N/A'),
+    # 'Current Count': current['count'],
+    # 'Old Count': old['count'],
+    # 'Count Diff': current['count'] - old['count'],
+    # 'Current Area': current['area'],
+    # 'Old Area': old['area'],
+    # 'Area Diff': current['area'] - old['area'],
+    # 'Current Volume': current['volume'],
+    # 'Old Volume': old['volume'],
+    # 'Volume Diff': current['volume'] - old['volume'],
+    # 'Current Length': current['length'],
+    # 'Old Length': old['length'],
+    # 'Length Diff': current['length'] - old['length']
+
+    for row, data in enumerate(comparison_data, start=2):
+        ws_details.cell(row=row, column=1, value=data['Family'])
+        ws_details.cell(row=row, column=2, value=data['Type'])
+        ws_details.cell(row=row, column=3, value=data['Type ID'])
+        ws_details.cell(row=row, column=4, value=data['Additional Info'])
+        ws_details.cell(row=row, column=5, value=data['Current Count'])
+        ws_details.cell(row=row, column=6, value=data['Old Count'])
+        ws_details.cell(row=row, column=7, value=data['Count Diff'])
+        ws_details.cell(row=row, column=8, value=data['Current Area'])
+        ws_details.cell(row=row, column=9, value=data['Old Area'])
+        ws_details.cell(row=row, column=10, value=data['Area Diff'])
+        ws_details.cell(row=row, column=11, value=data['Current Volume'])
+        ws_details.cell(row=row, column=12, value=data['Old Volume'])
+        ws_details.cell(row=row, column=13, value=data['Volume Diff'])
+        ws_details.cell(row=row, column=14, value=data['Current Length'])
+        ws_details.cell(row=row, column=15, value=data['Old Length'])
+        ws_details.cell(row=row, column=16, value=data['Length Diff'])
+        
     
     # Adjust column widths for details worksheet
     for column in ws_details.columns:
@@ -475,55 +486,80 @@ def create_excel_report(comparison_data, output_path):
                     max_length = len(cell.value)
             except:
                 pass
-        adjusted_width = (max_length + 2) * 1.2
+        adjusted_width = max_length
         ws_details.column_dimensions[column_letter].width = adjusted_width
+
+    wb.save(output_path)
+
+def create_excel_report_old(comparison_data, output_path):
+    '''
+    Create an Excel report from the comparison data.
+
+    Args:
+        comparison_data (list): A list of dictionaries containing the comparison data.
+        output_path (str): The path to save the Excel file.
+    Returns:
+        None
+    '''
+    wb = openpyxl.Workbook()
+    ws_old = wb.active
+    ws_old.title = "Old Model Type Details"
     
-    # Populate summary worksheet
-    summary_headers = ["Metric", "Total Change", "Significant Changes"]
-    for col, header in enumerate(summary_headers, start=1):
-        cell = ws_summary.cell(row=1, column=col, value=header)
+    headers = [
+        "Family", "Type", "Type ID", "Additional Info",
+        "Old Count",
+        "Old Area (sqm)",
+        "Old Volume (cu m)",
+        "Old Length (m)"
+    ]
+    
+    # sorted_comparison_data_old = {x['Family']: x for x in sorted(comparison_data[0], key=lambda x: safe_sort_key((x['Family'], x['Type'])))}
+    # sorted_comparison_data_current = {x['Family']: x for x in sorted(comparison_data[1], key=lambda x: safe_sort_key((x['Family'], x['Type'])))}
+
+    # Populate old details worksheet
+    for col, header in enumerate(headers, start=1):
+        cell = ws_old.cell(row=1, column=col, value=header)
+        cell.font = Font(bold=True)
+        cell.alignment = Alignment(horizontal='center')
+    
+    for row, (key, data) in enumerate(comparison_data[0].items(), start=2):
+        ws_old.cell(row=row, column=1, value=key[0])  # Family
+        ws_old.cell(row=row, column=2, value=key[1])  # Type
+        ws_old.cell(row=row, column=3, value=data['type_id'])
+        ws_old.cell(row=row, column=4, value=data['additional_info'])
+        ws_old.cell(row=row, column=5, value=data['count'])
+        ws_old.cell(row=row, column=6, value=data['area'])
+        ws_old.cell(row=row, column=7, value=data['volume'])
+        ws_old.cell(row=row, column=8, value=data['length'])
+    
+    ws_current = wb.create_sheet(title="Current Model Type Details")
+    
+    headers = [
+        "Family", "Type", "Type ID", "Additional Info",
+        "Current Count",
+        "Current Area (sqm)",
+        "Current Volume (cu m)",
+        "Current Length (m)"
+    ]
+
+    # Populate current details worksheet
+    for col, header in enumerate(headers, start=1):
+        cell = ws_current.cell(row=1, column=col, value=header)
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='center')
 
-    summary_metrics = {
-        "Count": sum(data['Count Diff'] for data in comparison_data),
-        "Area (sqm)": sum(data.get('Area Diff (sqm)', 0) for data in comparison_data),
-        "Volume (cu m)": sum(data.get('Volume Diff (cu m)', 0) for data in comparison_data),
-        "Length (m)": sum(data.get('Length Diff (m)', 0) for data in comparison_data)
-    }
+    for row, (key, data) in enumerate(comparison_data[1].items(), start=2):
+        ws_current.cell(row=row, column=1, value=key[0])  # Family
+        ws_current.cell(row=row, column=2, value=key[1])  # Type
+        ws_current.cell(row=row, column=3, value=data['type_id'])
+        ws_current.cell(row=row, column=4, value=data['additional_info'])
+        ws_current.cell(row=row, column=5, value=data['count'])
+        ws_current.cell(row=row, column=6, value=data['area'])
+        ws_current.cell(row=row, column=7, value=data['volume'])
+        ws_current.cell(row=row, column=8, value=data['length'])
 
-    significant_changes = {
-        "Count": [],
-        "Area (sqm)": [],
-        "Volume (cu m)": [],
-        "Length (m)": []
-    }
-
-    for data in comparison_data:
-        if abs(data.get('Count Diff', 0)) > 10:
-            significant_changes["Count"].append(f"{data['Family']} - {data['Type']}: {data['Count Diff']}")
-        if abs(data.get('Area Diff (sqm)', 0)) > 100:
-            significant_changes["Area (sqm)"].append(f"{data['Family']} - {data['Type']}: {data.get('Area Diff (sqm)', 0):.2f}")
-        if abs(data.get('Volume Diff (cu m)', 0)) > 10:
-            significant_changes["Volume (cu m)"].append(f"{data['Family']} - {data['Type']}: {data.get('Volume Diff (cu m)', 0):.2f}")
-        if abs(data.get('Length Diff (m)', 0)) > 100:
-            significant_changes["Length (m)"].append(f"{data['Family']} - {data['Type']}: {data.get('Length Diff (m)', 0):.2f}")
-
-    for row, (metric, value) in enumerate(summary_metrics.items(), start=2):
-        ws_summary.cell(row=row, column=1, value=metric)
-        ws_summary.cell(row=row, column=2, value=value)
-        ws_summary.cell(row=row, column=3, value="\n".join(significant_changes[metric]))
-
-    # Add potential impact on schedule and budget
-    impact_row = len(summary_metrics) + 3
-    ws_summary.cell(row=impact_row, column=1, value="Potential Impact on Schedule and Budget")
-    ws_summary.cell(row=impact_row, column=1).font = Font(bold=True)
-    
-    impact_text = generate_impact_assessment(summary_metrics)
-    ws_summary.cell(row=impact_row + 1, column=1, value=impact_text)
-
-    # Adjust column widths for summary worksheet
-    for column in ws_summary.columns:
+    # Adjust column widths for details worksheets
+    for column in ws_old.columns:
         max_length = 0
         column_letter = column[0].column_letter
         for cell in column:
@@ -532,10 +568,57 @@ def create_excel_report(comparison_data, output_path):
                     max_length = len(cell.value)
             except:
                 pass
-        adjusted_width = (max_length + 2) * 1.2
-        ws_summary.column_dimensions[column_letter].width = adjusted_width
+        adjusted_width = max_length
+        ws_old.column_dimensions[column_letter].width = adjusted_width
+    
+    for column in ws_current.columns:
+        max_length = 0
+        column_letter = column[0].column_letter
+        for cell in column:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(cell.value)
+            except:
+                pass
+        adjusted_width = max_length
+        ws_current.column_dimensions[column_letter].width = adjusted_width
 
     wb.save(output_path)
+
+def save_errors_to_file(errors, output_path):
+    '''
+    Save errors to a text file.
+
+    Args:
+        errors (list): A list of errors to save.
+        output_path (str): The path to save the output file.
+    '''
+    with io.open(output_path, 'w', encoding='utf-8') as f:
+        f.write("Errors occurred during processing: \n")
+        if errors:
+            for err, i in enumerate(errors, start=1):
+                try:
+                    f.write(f"{i}. {err}\n")
+                except UnicodeEncodeError as e:
+                    f.write(f"Error writing data for {key}: {str(e)}\n")
+
+def save_all_types_to_file(all_types, output_path):
+    '''
+    Save all types to a text file.
+
+    Args:
+        all_types (set): A set of all types processed.
+        output_path (str): The path to save the output file.
+    '''
+    with io.open(output_path, 'w', encoding='utf-8') as f:
+        f.write("Errors occurred during processing: \n")
+        if all_types:
+            f.write("\nAll types processed:\n")
+            for key in all_types:
+                if key is None:
+                    continue
+                family_name, type_name = key
+                f.write(f"{family_name} - {type_name}\n")
 
 def get_file_path_flexible(prompt, file_extension):
     '''
@@ -641,6 +724,7 @@ def safe_sort_key(item):
     return (str(item), "")
 
 def main():
+    clear_all_lru_caches()
     try:
         file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
         prefix = f"{file_name[0]}_{file_name[1]}"
@@ -660,19 +744,28 @@ def main():
         
         # Create a new file name with the timestamp
         output_file_name = f"{prefix}_Comparison_{timestamp}.xlsx"
+
+        # Create a new errors file name with the timestamp
+        errors_file_name = f"{prefix}_Comparison_errors_{timestamp}.txt"
         
         # Create the full file path by joining the folder path and the new file name
         output_path = os.path.join(output_folder_path, output_file_name)
 
+        # Create the full errors file path
+        errors_path = os.path.join(output_folder_path, errors_file_name)
+
+        all_types_path = os.path.join(output_folder_path, f"{prefix}_All_Types_{timestamp}.txt")
+
         print("Starting model comparison...")
-        comparison_data, errors = compare_models(doc, old_doc_path)
+        comparison_data, errors, all_types = compare_models(doc, old_doc_path)
+
+        print("Saving all the compared types to a file...")
+        if all_types: # Save all types to a file
+            save_all_types_to_file(all_types, all_types_path)
 
         if errors: # Check for errors during processing
-            print("Errors occurred during processing: ")
-            for error in errors:
-                print(error)
-            TaskDialog.Show("Error", f"Errors occurred during processing. Check the output window for details.")
-            return
+            save_errors_to_file(errors, all_types, errors_path)
+            TaskDialog.Show("Comparison Failed", f"Errors occurred during processing. Please check the errors file.")
 
         if not comparison_data:
             TaskDialog.Show("Comparison Failed", "No comparison data was generated. Please check the errors.")
@@ -681,11 +774,13 @@ def main():
         print("Creating Excel report...")
         create_excel_report(comparison_data, output_path)
         TaskDialog.Show("Comparison Complete", f"The comparison results have been saved to {output_path}")
+        clear_all_lru_caches()
 
     except Exception as e:
         print(f"Error in main function: {str(e)}")
         print(traceback.format_exc())
         TaskDialog.Show("Error", f"An unexpected error occurred: {str(e)}\n\nPlease check the output window for more details.")
+        clear_all_lru_caches()
 
 # Call the main function
 if __name__ == "__main__":
