@@ -94,13 +94,13 @@ def project_to_xy_plane(solid, is_ceiling=False):
                         for point in curve.Tessellate():
                             vertices.append((point.X, point.Y))
         except Exception as e:
-            debug_messages.append(f"Error processing face in project_to_xy_plane: {e}")
+            debug_messages.append(f"Error processing face in project_to_xy_plane: {e}\n{traceback.format_exc()}")
     
     if not vertices:
         return None
 
     if is_ceiling:
-        # For ceilings, create a single polygon using the convex hull
+        # For ceilings, create a single polygon using the convex hull (which is a polygon that encloses all points)
         try:
             from scipy.spatial import ConvexHull
             hull = ConvexHull(vertices)
@@ -108,7 +108,7 @@ def project_to_xy_plane(solid, is_ceiling=False):
             polygon = Polygon(hull_points)
             return polygon if polygon.is_valid else make_valid(polygon)
         except Exception as e:
-            debug_messages.append(f"Error creating ceiling polygon: {e}")
+            debug_messages.append(f"Error creating ceiling polygon: {e}\n{traceback.format_exc()}")
             return None
     else:
         # For rooms, create multiple polygons if necessary
@@ -118,7 +118,7 @@ def project_to_xy_plane(solid, is_ceiling=False):
                 polygon = make_valid(polygon)
             return [polygon]
         except Exception as e:
-            debug_messages.append(f"Error creating room polygon: {e}")
+            debug_messages.append(f"Error creating room polygon: {e}\n{traceback.format_exc()}")
             return None
 
 def calculate_intersection_areas(room_id, ceiling_id):
@@ -158,6 +158,47 @@ def calculate_intersection_areas(room_id, ceiling_id):
         if room_polygons and ceiling_polygons:
             room_multi_poly = unary_union(room_polygons)
             ceiling_multi_poly = unary_union(ceiling_polygons)
+            # Plot the room_polygons and ceiling_polygons geometries accurately on the xy plane
+            plt.figure()
+            for poly in room_polygons:
+                if isinstance(poly, Polygon):
+                    x, y = poly.exterior.xy
+                    plt.plot(x, y, color='blue', linewidth=5)
+                elif isinstance(poly, MultiPolygon):
+                    for sub_poly in poly:
+                        x, y = sub_poly.exterior.xy
+                        plt.plot(x, y, color='blue', linewidth=5)
+            for poly in ceiling_polygons:
+                if isinstance(poly, Polygon):
+                    x, y = poly.exterior.xy
+                    plt.plot(x, y, color='red', linewidth=1)
+                elif isinstance(poly, MultiPolygon):
+                    for sub_poly in poly:
+                        x, y = sub_poly.exterior.xy
+                        plt.plot(x, y, color='red', linewidth=1)
+            plt.axis('equal')
+            plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_xy.png")
+
+            # Plot the room_polygons and ceiling_polygons geometries on the yz plane in a new subplot
+            plt.figure()
+            for poly in room_polygons:
+                if isinstance(poly, Polygon):
+                    x, y = poly.exterior.xy
+                    plt.plot(y, x, color='blue', linewidth=5)
+                elif isinstance(poly, MultiPolygon):
+                    for sub_poly in poly:
+                        x, y = sub_poly.exterior.xy
+                        plt.plot(y, x, color='blue', linewidth=5)
+            for poly in ceiling_polygons:
+                if isinstance(poly, Polygon):
+                    x, y = poly.exterior.xy
+                    plt.plot(y, x, color='red', linewidth=1)
+                elif isinstance(poly, MultiPolygon):
+                    for sub_poly in poly:
+                        x, y = sub_poly.exterior.xy
+                        plt.plot(y, x, color='red', linewidth=1)
+            plt.axis('equal')
+            plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_yz.png")
             
             if room_multi_poly.intersects(ceiling_multi_poly):
                 intersection = room_multi_poly.intersection(ceiling_multi_poly)
@@ -192,7 +233,7 @@ def calculate_intersection_areas(room_id, ceiling_id):
             is_complex_shape = True
 
     except Exception as e:
-        debug_messages.append(f"Error in calculate_intersection_areas: {e}")
+        debug_messages.append(f"Error in calculate_intersection_areas: {e}\n{traceback.format_exc()}")
 
     return intersection_area_3d, intersection_area_xy, is_complex_shape
 
@@ -323,6 +364,7 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
         return room_union.intersects(ceiling_union)
     except Exception as e:
         debug_messages.append(f"Error in project_and_check_xy_intersection: {e}")
+        debug_messages.append(traceback.format_exc())
         # Fallback to bounding box check
         room_bb = get_element_bounding_box(room_id)
         ceiling_bb = get_element_bounding_box(ceiling_id)
@@ -486,6 +528,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             # Check if the ceiling has geometry
             if not get_element_geometry(ceiling_id):
                 debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
+                debug_messages.append(traceback.format_exc())
                 unrelated_ceilings.append(ceiling_details)
                 no_geometry_ceilings.append(ceiling_id)
                 continue
@@ -508,18 +551,25 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                 # Check for direct intersection
                 try:
                     direct_intersection = check_direct_intersection(room_id, ceiling_id)
+                    # if not direct_intersection:
+                    #     debug_messages.append(f"Direct intersection: {direct_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
                     # print(f"Direct intersection: {direct_intersection}")
                 except Exception as e:
                     debug_messages.append(f"Error in direct intersection check: {e}")
+                    debug_messages.append(traceback.format_exc())
                     direct_intersection = False
                 
                 # Check for XY projection intersection
                 xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
+                # if not xy_intersection:
+                #     debug_messages.append(f"XY projection intersection: {xy_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
                 
                 # If there's any kind of intersection, calculate the area and add to matched_rooms
                 if direct_intersection or xy_intersection:
                     intersection_area_3d, intersection_area_xy, is_complex_shape = calculate_intersection_areas(room_id, ceiling_id)
+                    # debug_messages.append(f"Intersection areas: 3D - {intersection_area_3d}, XY - {intersection_area_xy}, Complex shape - {is_complex_shape}")
                     distance = delta_ceiling_above_room(room_id, ceiling_id)
+                    # debug_messages.append(f"Distance: {distance}")
                     if is_complex_shape:
                         complex_shape_rooms.append({
                             'Room_ID': room_details[0],
@@ -585,6 +635,7 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
             if xy_intersections:
                 # Filter out rooms with negative or zero distance
                 positive_distance_rooms = [room for room in xy_intersections if room['Distance'] >= 0]
+                # debug_messages.append(f"Positive distance rooms: {len(positive_distance_rooms)}")
                 # Calculate level distances once
                 level_distances = calculate_max_level_heights(doc, building_levels)
 
@@ -618,6 +669,8 @@ def find_ceiling_room_relationships(room_elements, ceiling_elements):
                     if not leveled_rooms:
                         debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no rooms in the same level with positive distance to it")
                         continue
+                    else:
+                        relationships.extend(leveled_rooms)
                 else:
                     debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room in xy projections")
 
@@ -858,12 +911,12 @@ def main():
     clear_all_lru_caches()
     try:
         # Collect room and ceiling elements
-        room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-        ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
+        # room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
+        # ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
         # For testing purposes, use a subset of rooms and ceilings
-        # room_elements = [doc.GetElement(ElementId(2020995))]
-        # ceiling_elements = [doc.GetElement(ElementId(2545881))]
+        room_elements = [doc.GetElement(ElementId(1686235))]
+        ceiling_elements = [doc.GetElement(ElementId(2523734))]
 
         # Collect file name for excel name prefix
         file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
@@ -874,28 +927,28 @@ def main():
             df_relationships, df_unrelated, df_complex_shape = find_ceiling_room_relationships(room_elements, ceiling_elements)
         except Exception as e:
             debug_messages.append(f"Error in find_ceiling_room_relationships: {e}")
-            raise
+            debug_messages.append(traceback.format_exc())
 
         # Pivot the relationships data
         try:
             df_grouped = pivot_data(df_relationships)
         except Exception as e:
             debug_messages.append(f"Error in pivot_data (relationships): {e}")
-            raise
+            debug_messages.append(traceback.format_exc())
 
         # Pivot the complex shape rooms data
         try:
             df_complex_shape = pivot_data(df_complex_shape)
         except Exception as e:
             debug_messages.append(f"Error in pivot_data (complex shape rooms): {e}")
-            raise
+            debug_messages.append(traceback.format_exc())
 
         # Find rooms without ceilings
         try:
             df_rooms_without_ceilings = find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shape)
         except Exception as e:
             debug_messages.append(f"Error in find_rooms_without_ceilings: {e}")
-            raise
+            debug_messages.append(traceback.format_exc())
         
         # Output the dataframe to Excel with timestamp
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -928,7 +981,7 @@ def main():
                 adjust_column_widths(wb[sheet_name])
         except Exception as e:
             debug_messages.append(f"Error in saving to Excel: {e}")
-            raise
+            debug_messages.append(traceback.format_exc())
 
         # Save the workbook
         try:
@@ -936,13 +989,23 @@ def main():
             print(f"Schedule saved to {output_file_path}")
         except Exception as e:
             debug_messages.append(f"Error in saving workbook: {e}")
+            debug_messages.append(traceback.format_exc())
 
     except Exception as e:
         debug_messages.append(f"Error in main function: {e}")
+        debug_messages.append(traceback.format_exc())
     
-    print("Debug messages:")
-    for msg in debug_messages:
-        print(msg)
+
+    # Save debug messages to a text file
+    try:
+        debug_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{prefix}_debug_messages_{timestamp}.txt"
+        with open(debug_file_path, 'w', encoding='utf-8') as f:
+            for item in debug_messages:
+                f.write("%s\n" % item)
+        print(f"Debug messages saved to {debug_file_path}")
+    except Exception as e:
+        print(f"Error in saving debug messages: {e}")
+        print(traceback.format_exc())
     
     clear_all_lru_caches()
 
