@@ -371,45 +371,6 @@ def compare_models(current_doc, old_doc_path):
 
     return comparison_data, all_errors, all_types
 
-def compare_models_old(current_doc, old_doc_path):
-    '''
-    Compare the types between the current and old models.
-
-    Args:
-        current_doc (Document): The current Revit document.
-        old_doc_path (str): The path to the old Revit model file.
-    Returns:
-        tuple: A tuple containing a list of dictionaries with comparison data and a list of errors.
-    '''
-    app = current_doc.Application
-    all_errors = []
-
-    print("Processing current model...")
-    current_metrics, current_errors, current_processed = get_type_metrics(current_doc)
-    all_errors.extend(current_errors)
-    print(f"Processed {current_processed} elements in the current model.")
-
-    print("\nProcessing old model...")
-    try:
-        old_doc = app.OpenDocumentFile(old_doc_path)
-        old_metrics, old_errors, old_processed = get_type_metrics(old_doc)
-        all_errors.extend(old_errors)
-        print(f"Processed {old_processed} elements in the old model.")
-        old_doc.Close(False)
-    except Exception as e:
-        all_errors.append(f"Error opening old document: {str(e)}")
-        return [], all_errors
-
-    if current_metrics is None or old_metrics is None:
-        all_errors.append("Error: Failed to process one or both models.")
-        return [], all_errors
-
-    all_types = set(current_metrics.keys()) | set(old_metrics.keys())
-
-    comparison_data = [current_metrics, old_metrics]
-
-    return comparison_data, all_errors, all_types
-
 def create_excel_report(comparison_data, output_path):
     '''
     Create an Excel report from the comparison data.
@@ -491,100 +452,6 @@ def create_excel_report(comparison_data, output_path):
 
     wb.save(output_path)
 
-def create_excel_report_old(comparison_data, output_path):
-    '''
-    Create an Excel report from the comparison data.
-
-    Args:
-        comparison_data (list): A list of dictionaries containing the comparison data.
-        output_path (str): The path to save the Excel file.
-    Returns:
-        None
-    '''
-    wb = openpyxl.Workbook()
-    ws_old = wb.active
-    ws_old.title = "Old Model Type Details"
-    
-    headers = [
-        "Family", "Type", "Type ID", "Additional Info",
-        "Old Count",
-        "Old Area (sqm)",
-        "Old Volume (cu m)",
-        "Old Length (m)"
-    ]
-    
-    # sorted_comparison_data_old = {x['Family']: x for x in sorted(comparison_data[0], key=lambda x: safe_sort_key((x['Family'], x['Type'])))}
-    # sorted_comparison_data_current = {x['Family']: x for x in sorted(comparison_data[1], key=lambda x: safe_sort_key((x['Family'], x['Type'])))}
-
-    # Populate old details worksheet
-    for col, header in enumerate(headers, start=1):
-        cell = ws_old.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal='center')
-    
-    for row, (key, data) in enumerate(comparison_data[0].items(), start=2):
-        ws_old.cell(row=row, column=1, value=key[0])  # Family
-        ws_old.cell(row=row, column=2, value=key[1])  # Type
-        ws_old.cell(row=row, column=3, value=data['type_id'])
-        ws_old.cell(row=row, column=4, value=data['additional_info'])
-        ws_old.cell(row=row, column=5, value=data['count'])
-        ws_old.cell(row=row, column=6, value=data['area'])
-        ws_old.cell(row=row, column=7, value=data['volume'])
-        ws_old.cell(row=row, column=8, value=data['length'])
-    
-    ws_current = wb.create_sheet(title="Current Model Type Details")
-    
-    headers = [
-        "Family", "Type", "Type ID", "Additional Info",
-        "Current Count",
-        "Current Area (sqm)",
-        "Current Volume (cu m)",
-        "Current Length (m)"
-    ]
-
-    # Populate current details worksheet
-    for col, header in enumerate(headers, start=1):
-        cell = ws_current.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal='center')
-
-    for row, (key, data) in enumerate(comparison_data[1].items(), start=2):
-        ws_current.cell(row=row, column=1, value=key[0])  # Family
-        ws_current.cell(row=row, column=2, value=key[1])  # Type
-        ws_current.cell(row=row, column=3, value=data['type_id'])
-        ws_current.cell(row=row, column=4, value=data['additional_info'])
-        ws_current.cell(row=row, column=5, value=data['count'])
-        ws_current.cell(row=row, column=6, value=data['area'])
-        ws_current.cell(row=row, column=7, value=data['volume'])
-        ws_current.cell(row=row, column=8, value=data['length'])
-
-    # Adjust column widths for details worksheets
-    for column in ws_old.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(cell.value)
-            except:
-                pass
-        adjusted_width = max_length
-        ws_old.column_dimensions[column_letter].width = adjusted_width
-    
-    for column in ws_current.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            try:
-                if len(str(cell.value)) > max_length:
-                    max_length = len(cell.value)
-            except:
-                pass
-        adjusted_width = max_length
-        ws_current.column_dimensions[column_letter].width = adjusted_width
-
-    wb.save(output_path)
-
 def save_errors_to_file(errors, output_path):
     '''
     Save errors to a text file.
@@ -594,7 +461,7 @@ def save_errors_to_file(errors, output_path):
         output_path (str): The path to save the output file.
     '''
     with io.open(output_path, 'w', encoding='utf-8') as f:
-        f.write("Errors occurred during processing: \n")
+        f.write("Errors occurred during processing:\n\n")
         if errors:
             for err, i in enumerate(errors, start=1):
                 try:
@@ -611,9 +478,8 @@ def save_all_types_to_file(all_types, output_path):
         output_path (str): The path to save the output file.
     '''
     with io.open(output_path, 'w', encoding='utf-8') as f:
-        f.write("Errors occurred during processing: \n")
         if all_types:
-            f.write("\nAll types processed:\n")
+            f.write("All types processed:\n\n")
             for key in all_types:
                 if key is None:
                     continue
