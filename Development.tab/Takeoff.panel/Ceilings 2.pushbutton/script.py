@@ -7,6 +7,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import datetime
+import os
+import logging
+from pathlib import Path
+from typing import Set, List, Dict, Tuple, Optional
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
 from openpyxl.worksheet.views import SheetView, Pane
@@ -22,9 +26,6 @@ from Autodesk.Revit.Exceptions import InvalidOperationException
 # Get the current document
 doc = __revit__.ActiveUIDocument.Document
 
-# Initialize debug messages
-debug_messages = []
-
 # List to keep track of all LRU cached functions
 lru_cached_functions = []
 
@@ -35,6 +36,49 @@ def tracked_lru_cache(*args, **kwargs):
         return cached_func
     return decorator
 
+def setup_logging(prefix, timestamp):
+    '''
+    Setup logging to a file in the specified directory.
+
+    Args:
+        prefix (str): The prefix for the export directory.
+        timestamp (str): The timestamp for the export directory.
+    '''
+    # Use the user's Documents folder as the base directory
+    base_dir = Path.home() / "Documents"
+    log_dir = base_dir / "Shapir" / "Exports" / prefix / timestamp
+    
+    # Create the directory
+    log_dir.mkdir(parents=True, exist_ok=True)
+    
+    log_file = log_dir / "debug_log.txt"
+    logging.basicConfig(filename=str(log_file), level=logging.DEBUG,
+                        format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # Log the directory creation
+    logging.info(f"Log directory created: {log_dir}")
+
+def timing(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = datetime.datetime.now()
+        result = func(*args, **kwargs)
+        current_time = datetime.datetime.now()
+        elapsed_time = (current_time - start_time).total_seconds()
+        
+        # Assuming the first argument is the ceiling index and the second is the total number of ceilings
+        i, total_ceilings = args[0], args[1]
+        
+        total_time_expected = elapsed_time / i * total_ceilings
+        percent = (elapsed_time / total_time_expected) * 100 if total_time_expected > 0 else 0
+        time_to_finish = total_time_expected - elapsed_time
+        avg_processing_time = elapsed_time / i
+        
+        print(f"Time to finish: {abs(time_to_finish):.2f}s ({percent:.2f}%);   Elapsed time: {elapsed_time:.2f}s;    Avg. processing time: {avg_processing_time:.4f}s")
+        
+        return result
+    return wrapper
+
 @tracked_lru_cache(maxsize=None)
 def get_element_geometry(element_id):
     """
@@ -42,7 +86,6 @@ def get_element_geometry(element_id):
     
     Args:
         element_id (ElementId): The ID of the Revit element.
-    
     Returns:
         tuple or None: A tuple of Solid objects representing the element's geometry, or None if no valid geometry is found.
     """
@@ -54,7 +97,7 @@ def get_element_geometry(element_id):
             return tuple(solids) if solids else None
         return None
     except Exception as e:
-        debug_messages.append(f"Error in get_element_geometry: {e}")
+        logging.exception(f"Error in get_element_geometry: {e}")
         return None
 
 @tracked_lru_cache(maxsize=None)
@@ -64,7 +107,6 @@ def get_element_bounding_box(element_id):
     
     Args:
         element_id (ElementId): The ID of the Revit element.
-    
     Returns:
         BoundingBoxXYZ: The bounding box of the element.
     """
@@ -79,7 +121,6 @@ def project_to_xy_plane(solid, is_ceiling=False):
     Args:
         solid (Solid): The solid geometry.
         is_ceiling (bool): Whether the solid represents a ceiling.
-    
     Returns:
         Polygon or list of Polygon: The projected polygon(s) on the XY plane.
     """
@@ -94,7 +135,7 @@ def project_to_xy_plane(solid, is_ceiling=False):
                         for point in curve.Tessellate():
                             vertices.append((point.X, point.Y))
         except Exception as e:
-            debug_messages.append(f"Error processing face in project_to_xy_plane: {e}\n{traceback.format_exc()}")
+            logging.exception(f"Error processing face in project_to_xy_plane: {e}\n{traceback.format_exc()}")
     
     if not vertices:
         return None
@@ -108,7 +149,7 @@ def project_to_xy_plane(solid, is_ceiling=False):
             polygon = Polygon(hull_points)
             return polygon if polygon.is_valid else make_valid(polygon)
         except Exception as e:
-            debug_messages.append(f"Error creating ceiling polygon: {e}\n{traceback.format_exc()}")
+            logging.exception(f"Error creating ceiling polygon: {e}\n{traceback.format_exc()}")
             return None
     else:
         # For rooms, create multiple polygons if necessary
@@ -118,7 +159,7 @@ def project_to_xy_plane(solid, is_ceiling=False):
                 polygon = make_valid(polygon)
             return [polygon]
         except Exception as e:
-            debug_messages.append(f"Error creating room polygon: {e}\n{traceback.format_exc()}")
+            logging.exception(f"Error creating room polygon: {e}\n{traceback.format_exc()}")
             return None
 
 def calculate_intersection_areas(room_id, ceiling_id):
@@ -128,7 +169,6 @@ def calculate_intersection_areas(room_id, ceiling_id):
     Args:
         room_id (ElementId): The ID of the room element.
         ceiling_id (ElementId): The ID of the ceiling element.
-    
     Returns:
         tuple: (intersection_area_3d, intersection_area_xy) in square meters.
     """
@@ -219,7 +259,7 @@ def calculate_intersection_areas(room_id, ceiling_id):
                 if intersection_solid and intersection_solid.Volume > 0:
                     intersection_area_3d = intersection_solid.Volume * 0.092903  # Convert to square meters
             except InvalidOperationException as e:
-                debug_messages.append(f"Boolean operation failed: {e}; Room ID: {room_id.IntegerValue}, Ceiling ID: {ceiling_id.IntegerValue}")
+                logging.exception(f"Boolean operation failed: {e}; Room ID: {room_id.IntegerValue}, Ceiling ID: {ceiling_id.IntegerValue}")
                 # If boolean operation fails, use the XY projection area as an approximation
                 intersection_area_3d = intersection_area_xy
         
@@ -233,64 +273,104 @@ def calculate_intersection_areas(room_id, ceiling_id):
             is_complex_shape = True
 
     except Exception as e:
-        debug_messages.append(f"Error in calculate_intersection_areas: {e}\n{traceback.format_exc()}")
+        logging.exception(f"Error in calculate_intersection_areas: {e}\n{traceback.format_exc()}")
 
     return intersection_area_3d, intersection_area_xy, is_complex_shape
 
-def check_direct_intersection(room_id, ceiling_id):
+def save_and_close_figure(fig, output_path):
+    '''
+    Save the figure to the specified output path and close it.
+
+    Args:
+        fig (Figure): The figure to save.
+        output_path (str): The path to save the figure.
+    '''
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+
+def plot_room_ceiling(room_id, ceiling_id, output_path, ax1, ax2, prefix, timestamp):
+    '''
+    Plot the room and ceiling geometries on the specified ax1/ax2 plane with additional details.
+    Args:
+        room_id (ElementId): The ID of the room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+        output_path (str): The path to save the plot.
+        ax1 (str): The first axis to plot (X, Y, or Z).
+        ax2 (str): The second axis to plot (X, Y, or Z).
+    '''
+    fig = plt.figure(figsize=(12, 8))
+    room_geom = get_element_geometry(room_id)
+    ceiling_geom = get_element_geometry(ceiling_id)
+
+    room_details = get_room_details(doc.GetElement(room_id))
+    ceiling_details = get_ceiling_details(doc.GetElement(ceiling_id))
+
+    def get_point_coords(point):
+        coords = {'X': point.X, 'Y': point.Y, 'Z': point.Z}
+        return coords[ax1], coords[ax2]
+
+    for geom, color, linewidth in [(room_geom, 'blue', 5), (ceiling_geom, 'red', 1)]:
+        for solid in geom:
+            for face in solid.Faces:
+                for loop in face.EdgeLoops:
+                    for edge in loop:
+                        p1 = edge.AsCurve().GetEndPoint(0)
+                        p2 = edge.AsCurve().GetEndPoint(1)
+                        x1, y1 = get_point_coords(p1)
+                        x2, y2 = get_point_coords(p2)
+                        fig.plot([x1, x2], [y1, y2], color=color, linewidth=linewidth)
+
+    plt.axis('equal')
+    
+    # Add title and labels
+    plt.title(f"Room {room_details[2]} - {room_details[1]} (Level: {room_details[3]})")
+    plt.xlabel(f"{ax1} (meters)")
+    plt.ylabel(f"{ax2} (meters)")
+
+    # Add room information
+    room_info = (
+        f"Room Area: {room_details[6]:.2f} m²\n"
+        f"Building: {room_details[4]}\n"
+        f"Ceiling Finish: {room_details[5]}"
+    )
+    plt.text(0.02, 0.98, room_info, transform=ax.transAxes, verticalalignment='top', fontsize=8)
+
+    # Add ceiling information
+    ceiling_info = (
+        f"Ceiling Type: {ceiling_details[1]}\n"
+        f"Ceiling Area: {ceiling_details[2]:.2f} m²\n"
+        f"Ceiling Level: {ceiling_details[3]}"
+    )
+    plt.text(0.02, 0.88, ceiling_info, transform=ax.transAxes, verticalalignment='top', fontsize=8)
+
+    # Add legend
+    ax.legend(['Room', 'Ceiling'], loc='lower right')
+
+    output_plot_path = os.path.join(output_path, prefix, timestamp, "Plots", f"{ceiling_id}_{room_id}_{ax1}{ax2}.png")
+    save_and_close_figure(fig, output_plot_path)
+    logging.debug(f"Plot saved to: {output_plot_path}")
+
+    logging.exception(f"Plot saved to: {output_plot_path}")
+
+def check_direct_intersection(room_id, ceiling_id, prefix, timestamp):
     """
     Check if there's a direct intersection between room and ceiling geometries.
     
     Args:
         room_id (ElementId): The ID of the room element.
         ceiling_id (ElementId): The ID of the ceiling element.
-    
     Returns:
         bool: True if there's a direct intersection, False otherwise.
     """
     room_geom = get_element_geometry(room_id)
     ceiling_geom = get_element_geometry(ceiling_id)
 
-    # # Plot the room and ceiling geometries accuratly on the xy plane
-    # fig, ax = plt.subplots()
-    # for room_solid in room_geom:
-    #     for face in room_solid.Faces:
-    #         for loop in face.EdgeLoops:
-    #             for edge in loop:
-    #                 p1 = edge.AsCurve().GetEndPoint(0)
-    #                 p2 = edge.AsCurve().GetEndPoint(1)
-    #                 ax.plot([p1.X, p2.X], [p1.Y, p2.Y], color='blue', linewidth=5)
-    # for ceiling_solid in ceiling_geom:
-    #     for face in ceiling_solid.Faces:
-    #         for loop in face.EdgeLoops:
-    #             for edge in loop:
-    #                 p1 = edge.AsCurve().GetEndPoint(0)
-    #                 p2 = edge.AsCurve().GetEndPoint(1)
-    #                 # make line thicker
-    #                 ax.plot([p1.X, p2.X], [p1.Y, p2.Y], color='red', linewidth=1)
+    # Plot the room and ceiling geometries accuratly on the xy plane
+    # plot_room_ceiling(room_id, ceiling_id, r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_xy", 'X', 'Y', prefix, timestamp)
 
-    # plt.axis('equal')
-    # plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_xy.png")
-
-    # # plot the room and ceiling geometries on the yz plane in a new subplot
-    # fig, ax = plt.subplots()
-    # for room_solid in room_geom:
-    #     for face in room_solid.Faces:
-    #         for loop in face.EdgeLoops:
-    #             for edge in loop:
-    #                 p1 = edge.AsCurve().GetEndPoint(0)
-    #                 p2 = edge.AsCurve().GetEndPoint(1)
-    #                 ax.plot([p1.Y, p2.Y], [p1.Z, p2.Z], color='blue', linewidth=5)
-    # for ceiling_solid in ceiling_geom:
-    #     for face in ceiling_solid.Faces:
-    #         for loop in face.EdgeLoops:
-    #             for edge in loop:
-    #                 p1 = edge.AsCurve().GetEndPoint(0)
-    #                 p2 = edge.AsCurve().GetEndPoint(1)
-    #                 ax.plot([p1.Y, p2.Y], [p1.Z, p2.Z], color='red', linewidth=1)
-    
-    # plt.axis('equal')
-    # plt.savefig(r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_yz.png")
+    # plot the room and ceiling geometries accuratly on the yz plane
+    # plot_room_ceiling(room_id, ceiling_id, r"C:\Mac\Home\Documents\Shapir\Exports\room_ceiling_plot_yz", 'Y', 'Z', prefix, timestamp)
 
     for room_solid in room_geom:
         for ceiling_solid in ceiling_geom:
@@ -317,7 +397,6 @@ def check_bounding_box_intersection(bb1, bb2):
     Args:
         bb1 (BoundingBoxXYZ): First bounding box
         bb2 (BoundingBoxXYZ): Second bounding box
-    
     Returns:
         bool: True if the bounding boxes intersect, False otherwise.
     """
@@ -332,7 +411,6 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
     Args:
         room_id (ElementId): The ID of the room element.
         ceiling_id (ElementId): The ID of the ceiling element.
-    
     Returns:
         bool: True if there's an intersection in the XY projection, False otherwise.
     """
@@ -363,8 +441,8 @@ def project_and_check_xy_intersection(room_id, ceiling_id):
         ceiling_union = unary_union(ceiling_polygons)
         return room_union.intersects(ceiling_union)
     except Exception as e:
-        debug_messages.append(f"Error in project_and_check_xy_intersection: {e}")
-        debug_messages.append(traceback.format_exc())
+        logging.exception(f"Error in project_and_check_xy_intersection: {e}")
+        logging.exception(traceback.format_exc())
         # Fallback to bounding box check
         room_bb = get_element_bounding_box(room_id)
         ceiling_bb = get_element_bounding_box(ceiling_id)
@@ -377,7 +455,6 @@ def delta_ceiling_above_room(room_id, ceiling_id):
     Args:
         room_id (ElementId): The ID of the room element.
         ceiling_id (ElementId): The ID of the ceiling element.
-    
     Returns:
         int: distanse between the ceiling and the room.
     """
@@ -393,9 +470,8 @@ def get_room_details(room):
     
     Args:
         room (SpatialElement): The room element.
-    
     Returns:
-        Tuple[int, str, str, str, str]: The room details (room_id, room_name, room_number, room_level, room_building).
+        Tuple[int, str, str, str, str, str, float]: The room details (room_id, room_name, room_number, room_level, room_building, room_ceiling_finish, room_area).
     """
     room_id = room.Id.IntegerValue
     room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
@@ -416,7 +492,6 @@ def get_ceiling_details(ceiling):
     
     Args:
         ceiling (Ceiling): The ceiling element.
-    
     Returns:
         Tuple[int, str, str, float, str]: The ceiling details (ceiling_id, ceiling_description, ceiling_area, ceiling_level).
     """
@@ -439,9 +514,8 @@ def custom_sort_key(value):
 
     Args:
         value: The value to be sorted.
-    
     Returns:
-        float: The value converted to float if possible, or inf.
+        float: The value converted to a float, or infinity if the value is None.
     """
     if value is None:
         return float('inf')  # This will put None values at the end of the sort order
@@ -457,7 +531,6 @@ def calculate_max_level_heights(doc, building_levels):
     Args:
         doc (Document): The Revit document.
         building_levels (list): A list of sets, where each set contains the levels for a building.
-    
     Returns:
         list: A list of maximum level heights, one for each building.
     '''
@@ -485,253 +558,681 @@ def calculate_max_level_heights(doc, building_levels):
 
     return max_heights
 
-def find_ceiling_room_relationships(room_elements, ceiling_elements):
-    """
-    Find the relationship between ceilings and rooms based on the two vectors.
-    
+def process_room(ceiling: Ceiling, room: SpatialElement, building_levels: List[set], prefix: str, timestamp: str) -> Tuple[List[Dict], List[Dict], List[ElementId], List[Dict], List[ElementId]]:
+    '''
+    Process a room and its relationship with a ceiling.
+
     Args:
-        room_elements (list): List of room elements.
-        ceiling_elements (list): List of ceiling elements.
-    
+        ceiling (Ceiling): The ceiling element to process.
+        room (SpatialElement): The room element to process.
+        building_levels (List[set]): List of sets containing building level ElementIds.
+        prefix (str): Prefix for output files.
+        timestamp (str): Timestamp for output files.
     Returns:
-        tuple: Two pandas DataFrames - one for related ceilings and rooms, one for unrelated ceilings.
-    """
+        Tuple containing:
+        - List of relationship dictionaries
+        - List of complex shape room dictionaries
+        - List of room ElementIds without geometry
+        - List of XY intersection dictionaries
+        - List of room ElementIds with direct intersections
+    '''
+    relationships = []
+    complex_shape_rooms = []
+    no_geometry_rooms = []
+    xy_intersections = []
+    direct_intersections = []
+
+    room_id = room.Id
+    ceiling_id = ceiling.Id
+
     try:
-        relationships = []
-        unrelated_ceilings = []
-        complex_shape_rooms = []
-        no_geometry_rooms = []
-        no_geometry_ceilings = []
+        room_details = get_room_details(room)
+        ceiling_details = get_ceiling_details(ceiling)
+    except Exception as e:
+        logging.exception(f"Error getting room or ceiling details: {e}")
+        return relationships, complex_shape_rooms, no_geometry_rooms, xy_intersections, direct_intersections
 
-        # # C AB:
-        # building_A_levels = {ElementId(6533282), ElementId(694), ElementId(6568872)}  # 00, 01A, RF
-        # building_B_levels = {ElementId(8968108), ElementId(9048752), ElementId(9057595)}  # B 00, B 01, B RF
-        # common_levels = {ElementId(311)}  # -0.5
+    # Skip rooms without valid geometry
+    if not get_element_geometry(room_id):
+        no_geometry_rooms.append(room_id)
+        return relationships, complex_shape_rooms, no_geometry_rooms, xy_intersections, direct_intersections
 
-        # S AB:
-        building_A_levels = {}
-        building_B_levels = {}
-        common_levels = {ElementId(2003554), ElementId(13071), ElementId(15913), ElementId(1764693), ElementId(2102106)} # -1, 00, 01, 02, 03
+    intersection_data = check_intersections(room_id, ceiling_id, prefix, timestamp)
+    if intersection_data is None:
+        return relationships, complex_shape_rooms, no_geometry_rooms, xy_intersections, direct_intersections
+
+    direct_intersection, xy_intersection, intersection_area_3d, intersection_area_xy, is_complex_shape, distance = intersection_data
+
+    if direct_intersection or xy_intersection:
+        room_data = create_room_data(room_details, ceiling_details, intersection_area_3d, intersection_area_xy, direct_intersection, xy_intersection, distance)
+
+        if is_complex_shape:
+            complex_shape_rooms.append(room_data)
+        elif direct_intersection:
+            direct_intersections.append(room_id)
+            relationships.append(room_data)
+        elif xy_intersection:
+            xy_intersections.append(room_data)
+
+    return relationships, complex_shape_rooms, no_geometry_rooms, xy_intersections, direct_intersections
+
+def check_intersections(room_id: ElementId, ceiling_id: ElementId, prefix: str, timestamp: str) -> Optional[Tuple[bool, bool, float, float, bool, float]]:
+    """Check for direct and XY projection intersections between a room and a ceiling."""
+    try:
+        direct_intersection = check_direct_intersection(room_id, ceiling_id, prefix, timestamp)
+        xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
+        intersection_area_3d, intersection_area_xy, is_complex_shape = calculate_intersection_areas(room_id, ceiling_id)
+        distance = delta_ceiling_above_room(room_id, ceiling_id)
+        return direct_intersection, xy_intersection, intersection_area_3d, intersection_area_xy, is_complex_shape, distance
+    except Exception as e:
+        logging.exception(f"Error in intersection checks: {e}")
+        return None
+
+def create_room_data(room_details: Tuple, ceiling_details: Tuple, intersection_area_3d: float, intersection_area_xy: float, direct_intersection: bool, xy_intersection: bool, distance: float) -> Dict:
+    """Create a dictionary with room and ceiling data."""
+    return {
+        'Room_ID': room_details[0],
+        'Room_Name': room_details[1],
+        'Room_Number': room_details[2],
+        'Room_Level': room_details[3],
+        'Room_Building': room_details[4],
+        'Room_Area_sqm': room_details[6],
+        'Room_Ceiling_Finish': room_details[5],
+        'Ceiling_ID': ceiling_details[0],
+        'Ceiling_Level': ceiling_details[3],
+        'Ceiling_Description': ceiling_details[1],
+        'Ceiling_Description_Old': ceiling_details[1],
+        'Ceiling_Area_sqm': ceiling_details[2],
+        'Intersection_Area_3D_sqm': intersection_area_3d,
+        'Intersection_Area_XY_sqm': intersection_area_xy,
+        'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
+        'Direct_Intersection': direct_intersection,
+        'XY_Projection_Intersection': xy_intersection,
+        'Distance': distance
+    }
+
+def check_ceiling_geometry(doc: Document, ceiling_id: ElementId) -> bool:
+    '''
+    Check if the ceiling has valid geometry.
+
+    Args:
+        doc (Document): The Revit document.
+        ceiling_id (ElementId): The ID of the ceiling element.
+    Returns:
+        bool: True if the ceiling has valid geometry, False otherwise.
+    '''
+    if not get_element_geometry(ceiling_id):
+        logging.exception(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
+        return False
+    return True
+
+def process_room_intersections(doc: Document, room: SpatialElement, ceiling_id: ElementId, prefix: str, timestamp: str) -> Tuple[Optional[Dict], Optional[Dict], bool, bool]:
+    '''
+    Process the intersections between a room and a ceiling.
+
+    Args:
+        doc (Document): The Revit document.
+        room (SpatialElement): The room element.
+        ceiling_id (ElementId): The ID of the ceiling element.
+        prefix (str): Prefix for output files.
+        timestamp (str): Timestamp for output files.
+    Returns:
+        Tuple (list, list, bool, bool): room_data, complex_shape_room, is_direct, is_xy
+    '''
+    room_id = room.Id
+    room_details = get_room_details(room)
+    
+    if not get_element_geometry(room_id):
+        return None, None, False, False
+    
+    direct_intersection = check_direct_intersection(room_id, ceiling_id, prefix, timestamp)
+    xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
+    
+    if direct_intersection or xy_intersection:
+        intersection_area_3d, intersection_area_xy, is_complex_shape = calculate_intersection_areas(room_id, ceiling_id)
+        distance = delta_ceiling_above_room(room_id, ceiling_id)
         
+        room_data = create_room_data(room_details, ceiling_details, intersection_area_3d, intersection_area_xy, direct_intersection, xy_intersection, distance)
+        
+        if is_complex_shape:
+            return None, room_data, False, False
+        else:
+            return room_data, None, direct_intersection, xy_intersection
+    
+    return None, None, False, False
+
+def handle_xy_intersections(xy_intersections: List[Dict], building_levels: List[set], doc: Document) -> List[Dict]:
+    '''
+    Handle intersections that are only in the XY projection.
+
+    Args:
+        xy_intersections (List[Dict]): List of room data dictionaries with only XY intersections.
+        building_levels (List[set]): List of sets containing building level ElementIds.
+        doc (Document): The Revit document.
+    Returns:
+        List[Dict]: List of room data dictionaries with leveled rooms.
+    '''
+    positive_distance_rooms = [room for room in xy_intersections if room['Distance'] >= 0]
+    if not positive_distance_rooms:
+        return []
+    
+    level_distances = calculate_max_level_heights(doc, building_levels)
+    min_distance_room = min(positive_distance_rooms, key=lambda x: x['Distance'])
+    min_distance_level = doc.GetElement(ElementId(min_distance_room['Room_ID'])).LevelId
+    
+    filtered_rooms = [
+        room for room in positive_distance_rooms
+        if doc.GetElement(ElementId(room['Room_ID'])).LevelId == min_distance_level
+    ]
+    
+    return filter_leveled_rooms(filtered_rooms, level_distances)
+
+def filter_leveled_rooms(filtered_rooms: List[Dict], level_distances: List[float]) -> List[Dict]:
+    '''
+    Filter the rooms based on the building levels and distances.
+
+    Args:
+        filtered_rooms (List[Dict]): List of room data dictionaries.
+        level_distances (List[float]): List of maximum level heights for each building.
+    Returns:
+        List[Dict]: List of room data dictionaries with leveled rooms.
+    '''
+    leveled_rooms = []
+    for room in filtered_rooms:
+        if room['Room_Building'] == "A" and room['Distance'] <= level_distances[0]:
+            leveled_rooms.append(room)
+        elif room['Room_Building'] == "B" and room['Distance'] <= level_distances[1]:
+            leveled_rooms.append(room)
+        elif room['Distance'] <= level_distances[2]:
+            leveled_rooms.append(room)
+    return leveled_rooms
+
+@timing
+def process_ceiling(ceiling_index: int, total_ceilings: int, ceiling: Ceiling, room_elements: List[SpatialElement], building_levels: List[set], doc: Document, prefix: str, timestamp: str) -> Tuple[List[Dict], List[Tuple], List[Dict], List[ElementId]]:
+    '''
+    Process a ceiling and its relationships with rooms.
+
+    Args:
+        ceiling_index (int): The index of the ceiling in the list.
+        total_ceilings (int): The total number of ceilings.
+        ceiling (Ceiling): The ceiling element to process.
+        room_elements (List[SpatialElement]): List of room elements.
+        building_levels (List[set]): List of sets containing building level ElementIds.
+        doc (Document): The Revit document.
+        prefix (str): Prefix for output files.
+        timestamp (str): Timestamp for output files.
+    Returns:
+        Tuple (list, list, list, list): relationships, ceiling_details, complex_shape_rooms, no_geometry_rooms
+    '''
+    ceiling_id = ceiling.Id
+    ceiling_details = get_ceiling_details(ceiling)
+    
+    relationships = []
+    complex_shape_rooms = []
+    no_geometry_rooms = []
+    
+    if not check_ceiling_geometry(doc, ceiling_id):
+        return [], [ceiling_details], [], [ceiling_id]
+    
+    direct_intersections = []
+    xy_intersections = []
+    
+    for room in room_elements:
+        room_data, complex_shape_room, is_direct, is_xy = process_room_intersections(doc, room, ceiling_id, prefix, timestamp)
+        
+        if complex_shape_room:
+            complex_shape_rooms.append(complex_shape_room)
+        elif room_data:
+            if is_direct:
+                direct_intersections.append(room.Id)
+                relationships.append(room_data)
+            elif is_xy:
+                xy_intersections.append(room_data)
+        elif not get_element_geometry(room.Id):
+            no_geometry_rooms.append(room.Id)
+    
+    if not direct_intersections and xy_intersections:
+        leveled_rooms = handle_xy_intersections(xy_intersections, building_levels, doc)
+        relationships.extend(leveled_rooms)
+    
+    if not relationships:
+        return [], [ceiling_details], complex_shape_rooms, no_geometry_rooms
+    
+    return relationships, [], complex_shape_rooms, no_geometry_rooms
+
+def update_ceiling_description(df_relationships):
+    if not df_relationships.empty:
+        df_relationships.loc[(df_relationships['Ceiling_Description'] == '"פלב"מ "ריגיד') & 
+                             (df_relationships['Intersection_Area_sqm'] > 0) &
+                             (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) &
+                             (df_relationships['Room_Ceiling_Finish'] == 'פנל מבודד צבוע'), 'Ceiling_Description'
+        ] = 'פנל מבודד צבוע'
+        df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") &
+                             (df_relationships['Intersection_Area_sqm'] > 0) &
+                             (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) &
+                             (df_relationships['Room_Ceiling_Finish'] == 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'
+        ] = 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'
+        df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") &
+                             (df_relationships['Intersection_Area_sqm'] > 0) &
+                             (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) &
+                             (df_relationships['Room_Ceiling_Finish'] == 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'
+        ] = 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'
+        return df_relationships
+    else:
+        logging.exception("Dataframe 'df_relationships' is empty")
+        return df_relationships
+
+def initialize_data_structures() -> Tuple[List, List, List, List, List]:
+    '''
+    Initialize the data structures for processing ceilings.
+
+    Returns:
+        Tuple containing:
+        - List of relationship dictionaries
+        - List of unrelated ceiling tuples
+        - List of complex shape room dictionaries
+        - List of room ElementIds without geometry
+        - List of ceiling ElementIds without geometry
+    '''
+    return [], [], [], [], []
+
+def process_all_ceilings(
+    ceiling_elements: List[Ceiling],
+    room_elements: List[SpatialElement],
+    building_levels: List[Set[ElementId]],
+    doc: Document,
+    prefix: str,
+    timestamp: str
+) -> Tuple[List[Dict], List[Tuple], List[Dict], List[ElementId], List[ElementId]]:
+    '''
+    Process all ceilings and their relationships with rooms.
+
+    Args:
+        ceiling_elements (List[Ceiling]): List of ceiling elements.
+        room_elements (List[SpatialElement]): List of room elements.
+        building_levels (List[Set[ElementId]]): List of sets containing building level ElementIds.
+        doc (Document): The Revit document.
+        prefix (str): Prefix for output files.
+        timestamp (str): Timestamp for output files.
+    Returns:
+        Tuple containing:
+        - List of relationship dictionaries
+        - List of unrelated ceiling tuples
+        - List of complex shape room dictionaries
+        - List of room ElementIds without geometry
+        - List of ceiling ElementIds without geometry
+    '''
+    relationships, unrelated_ceilings, complex_shape_rooms, no_geometry_rooms, no_geometry_ceilings = initialize_data_structures()
+
+    for i, ceiling in enumerate(ceiling_elements, 1):
+        ceiling_results = process_ceiling(i, len(ceiling_elements), ceiling, room_elements, building_levels, doc, prefix, timestamp)
+        
+        relationships.extend(ceiling_results[0])
+        unrelated_ceilings.extend(ceiling_results[1])
+        complex_shape_rooms.extend(ceiling_results[2])
+        no_geometry_rooms.extend(ceiling_results[3])
+        if ceiling_results[1]:  # If ceiling is unrelated, it has no geometry
+            no_geometry_ceilings.append(ceiling.Id)
+
+    return relationships, unrelated_ceilings, complex_shape_rooms, no_geometry_rooms, no_geometry_ceilings
+
+def handle_no_geometry_rooms(no_geometry_rooms: List[ElementId], doc: Document):
+    '''
+    Handle rooms without geometry by logging their details once.
+
+    Args:
+        no_geometry_rooms (List[ElementId]): List of room ElementIds without geometry.
+        doc (Document): The Revit document.
+    '''
+    for room_id in set(no_geometry_rooms):  # Use set to remove duplicates
+        room = doc.GetElement(room_id)
+        room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
+        room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
+        room_building_param = room.LookupParameter("בניין")
+        room_building = room_building_param.AsString() if room_building_param else None
+        room_level = doc.GetElement(room.LevelId).Name
+        logging.exception(f"No geometry found for room ID: {room_id.IntegerValue} - Building: {room_building}, Level: {room_level}, Name: {room_name}, Number: {room_number}")
+
+def create_dataframes(
+    relationships: List[Dict],
+    unrelated_ceilings: List[Tuple],
+    complex_shape_rooms: List[Dict]
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    '''
+    Create DataFrames from the processed data.
+
+    Args:
+        relationships (List[Dict]): List of relationship dictionaries.
+        unrelated_ceilings (List[Tuple]): List of unrelated ceiling tuples.
+        complex_shape_rooms (List[Dict]): List of complex shape room dictionaries.
+    Returns:
+        Tuple of DataFrames for relationships, unrelated ceilings, and complex shape rooms.
+    '''
+    df_relationships = pd.DataFrame(relationships)
+    df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
+    df_complex_shape_rooms = pd.DataFrame(complex_shape_rooms)
+    return df_relationships, df_unrelated, df_complex_shape_rooms
+
+def sort_and_update_dataframes(
+    df_relationships: pd.DataFrame,
+    df_unrelated: pd.DataFrame,
+    df_complex_shape_rooms: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    '''
+    Sort and update the DataFrames.
+
+    Args:
+        df_relationships (pd.DataFrame): DataFrame for relationships.
+        df_unrelated (pd.DataFrame): DataFrame for unrelated ceilings.
+        df_complex_shape_rooms (pd.DataFrame): DataFrame for complex shape rooms.
+    Returns:
+        Tuple of sorted and updated DataFrames.
+    '''
+    if not df_relationships.empty:
+        df_relationships = df_relationships.sort_values(
+            by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
+            key=lambda x: x.map(custom_sort_key)
+        )
+        df_relationships = update_ceiling_description(df_relationships)
+
+    if not df_unrelated.empty:
+        df_unrelated = df_unrelated.sort_values(
+            by=['Ceiling_Level', 'Ceiling_Description'],
+            key=lambda x: x.map(custom_sort_key)
+        )
+
+    if not df_complex_shape_rooms.empty:
+        df_complex_shape_rooms = df_complex_shape_rooms.sort_values(
+            by=['Room_Building', 'Room_Level', 'Room_Number'],
+            key=lambda x: x.map(custom_sort_key)
+        )
+
+    return df_relationships, df_unrelated, df_complex_shape_rooms
+
+def find_ceiling_room_relationships(
+    room_elements: List[SpatialElement],
+    ceiling_elements: List[Ceiling],
+    building_A_levels: Set[ElementId],
+    building_B_levels: Set[ElementId],
+    common_levels: Set[ElementId],
+    doc: Document,
+    prefix: str,
+    timestamp: str
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    '''
+    Find the relationship between ceilings and rooms.
+
+    Args:
+        room_elements: List of room elements.
+        ceiling_elements: List of ceiling elements.
+        building_A_levels: Set of level IDs for building A.
+        building_B_levels: Set of level IDs for building B.
+        common_levels: Set of level IDs for common levels.
+        doc: The current Revit document.
+        prefix: The prefix for the output files.
+        timestamp: The timestamp for the output files.
+    Returns:
+        Tuple of DataFrames for relationships, unrelated ceilings, and complex shape rooms.
+    '''
+    try:
         building_levels = [building_A_levels, building_B_levels, common_levels]
 
-        start_time = datetime.datetime.now() # Start time for performance measurement
+        relationships, unrelated_ceilings, complex_shape_rooms, no_geometry_rooms, no_geometry_ceilings = process_all_ceilings(
+            ceiling_elements, room_elements, building_levels, doc, prefix, timestamp
+        )
 
-        # notification_counter = 0
+        handle_no_geometry_rooms(no_geometry_rooms, doc)
 
-        for i, ceiling in enumerate(ceiling_elements, 1):
-            ceiling_start_time = datetime.datetime.now() # Start time for performance measurement
+        df_relationships, df_unrelated, df_complex_shape_rooms = create_dataframes(
+            relationships, unrelated_ceilings, complex_shape_rooms
+        )
 
-            ceiling_id = ceiling.Id
-            ceiling_details = get_ceiling_details(ceiling)
-            
-            # Check if the ceiling has geometry
-            if not get_element_geometry(ceiling_id):
-                debug_messages.append(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
-                debug_messages.append(traceback.format_exc())
-                unrelated_ceilings.append(ceiling_details)
-                no_geometry_ceilings.append(ceiling_id)
-                continue
-            
-            direct_intersections = []
-            xy_intersections = []
-
-            # Iterate through all rooms to find intersections with the current ceiling
-            for j, room in enumerate(room_elements, 1):
-                room_start_time = datetime.datetime.now() # Start time for performance measurement
-                room_id = room.Id
-                room_details = get_room_details(room)
-                
-                # Skip rooms without valid geometry
-                if not get_element_geometry(room_id):
-                    if room_id not in no_geometry_rooms:
-                        no_geometry_rooms.append(room_id)
-                    continue
-                
-                # Check for direct intersection
-                try:
-                    direct_intersection = check_direct_intersection(room_id, ceiling_id)
-                    # if not direct_intersection:
-                    #     debug_messages.append(f"Direct intersection: {direct_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
-                    # print(f"Direct intersection: {direct_intersection}")
-                except Exception as e:
-                    debug_messages.append(f"Error in direct intersection check: {e}")
-                    debug_messages.append(traceback.format_exc())
-                    direct_intersection = False
-                
-                # Check for XY projection intersection
-                xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
-                # if not xy_intersection:
-                #     debug_messages.append(f"XY projection intersection: {xy_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
-                
-                # If there's any kind of intersection, calculate the area and add to matched_rooms
-                if direct_intersection or xy_intersection:
-                    intersection_area_3d, intersection_area_xy, is_complex_shape = calculate_intersection_areas(room_id, ceiling_id)
-                    # debug_messages.append(f"Intersection areas: 3D - {intersection_area_3d}, XY - {intersection_area_xy}, Complex shape - {is_complex_shape}")
-                    distance = delta_ceiling_above_room(room_id, ceiling_id)
-                    # debug_messages.append(f"Distance: {distance}")
-                    if is_complex_shape:
-                        complex_shape_rooms.append({
-                            'Room_ID': room_details[0],
-                            'Room_Name': room_details[1],
-                            'Room_Number': room_details[2],
-                            'Room_Level': room_details[3],
-                            'Room_Building': room_details[4],
-                            'Room_Area_sqm (* 1.05)': room_details[6] * 1.05,
-                            'Room_Ceiling_Finish': room_details[5],
-                            'Ceiling_ID': ceiling_details[0],
-                            'Ceiling_Level': ceiling_details[3],
-                            'Ceiling_Description': ceiling_details[1],
-                            'Ceiling_Description_Old': ceiling_details[1],
-                            'Ceiling_Area_sqm (* 1.3)': ceiling_details[2] * 1.3,
-                            'Intersection_Area_3D_sqm': intersection_area_3d,
-                            'Intersection_Area_XY_sqm': intersection_area_xy,
-                            'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
-                            'Direct_Intersection': direct_intersection,
-                            'XY_Projection_Intersection': xy_intersection,
-                            'Distance': distance
-                        })
-                        continue  # Skip adding to relationships
-                    room_data = {
-                        'Ceiling_ID': ceiling_details[0],
-                        'Ceiling_Description': ceiling_details[1],
-                        'Ceiling_Description_Old': ceiling_details[1],
-                        'Room_Ceiling_Finish': room_details[5],
-                        'Ceiling_Area_sqm': ceiling_details[2],
-                        'Ceiling_Level': ceiling_details[3],
-                        'Room_ID': room_details[0],
-                        'Room_Name': room_details[1],
-                        'Room_Number': room_details[2],
-                        'Room_Level': room_details[3],
-                        'Room_Building': room_details[4],
-                        'Room_Area_sqm': room_details[6],
-                        'Intersection_Area_3D_sqm': intersection_area_3d,
-                        'Intersection_Area_XY_sqm': intersection_area_xy,
-                        'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
-                        'Direct_Intersection': direct_intersection,
-                        'XY_Projection_Intersection': xy_intersection,
-                        'Distance': distance
-                    }
-                    if direct_intersection:
-                        direct_intersections.append(room_id)
-                        relationships.append(room_data) #immidiatly add direct intersections to the relationships
-                    elif xy_intersection:
-                        xy_intersections.append(room_data)
-
-                # if notification_counter % 200 == 0:  
-                #     elapsed_time = (datetime.datetime.now() - start_time).total_seconds()
-                #     processing_time = (datetime.datetime.now() - room_start_time).total_seconds()
-                #     ceiling_digits = len(str(len(ceiling_elements)))
-                #     room_digits = len(str(len(room_elements)))
-                #     print(f"Processing pair c{i:{ceiling_digits}d}/{len(ceiling_elements)}   r{j:{room_digits}d}/{len(room_elements)}")
-                
-                # notification_counter += 1
-                elapsed_time = (datetime.datetime.now() - start_time).total_seconds()
-                avg_processing_time = elapsed_time / i / j
-
-            # distances = [(room['Room_ID'], room['Distance']) for room in matched_rooms]
-
-            # If there are no direct intersections, process the XY intersections
-            if xy_intersections:
-                # Filter out rooms with negative or zero distance
-                positive_distance_rooms = [room for room in xy_intersections if room['Distance'] >= 0]
-                # debug_messages.append(f"Positive distance rooms: {len(positive_distance_rooms)}")
-                # Calculate level distances once
-                level_distances = calculate_max_level_heights(doc, building_levels)
-
-                if positive_distance_rooms:
-                    # Find the smallest positive distance
-                    min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
-                    room_with_min_distance = min(positive_distance_rooms, key=lambda x: x['Distance'])
-                    min_distance_level = doc.GetElement(ElementId(room_with_min_distance['Room_ID'])).LevelId
-                    
-                    filtered_rooms = [
-                        room for room in positive_distance_rooms
-                        if doc.GetElement(ElementId(room['Room_ID'])).LevelId == min_distance_level
-                    ]
-
-                    leveled_rooms = []
-
-                    for room in filtered_rooms:
-                        if room['Room_Building'] == "A":
-                            # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[0]}")
-                            if room['Distance'] <= level_distances[0]:
-                                leveled_rooms.append(room)
-                        if room['Room_Building'] == "B":
-                            # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[1]}")
-                            if room['Distance'] <= level_distances[1]:
-                                leveled_rooms.append(room)
-                        else:
-                            # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[2]}")
-                            if room['Distance'] <= level_distances[2]:
-                                leveled_rooms.append(room)
-                    
-                    if not leveled_rooms:
-                        debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no rooms in the same level with positive distance to it")
-                        continue
-                    else:
-                        relationships.extend(leveled_rooms)
-                else:
-                    debug_messages.append(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room in xy projections")
-
-            # If no rooms intersect with the ceiling, mark the ceiling as unrelated
-            if not direct_intersections and not xy_intersections:
-                unrelated_ceilings.append(ceiling_details)
-
-            current_time = datetime.datetime.now()
-            elapsed_time = (current_time - start_time).total_seconds()
-            total_time_expected = elapsed_time / i * len(ceiling_elements)
-            percent = (elapsed_time / total_time_expected) * 100 if total_time_expected > 0 else 0
-            time_to_finish = total_time_expected - elapsed_time
-            print(f"Time to finish: {abs(time_to_finish):.2f}s ({percent:.2f}%);   Elapsed time: {elapsed_time:.2f}s;    Avg. processing time: {avg_processing_time:.4f}s")
-
-        # Collect debug messages for rooms without geometry
-        for room_id in no_geometry_rooms:
-            room = doc.GetElement(room_id)
-            room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
-            room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
-            room_building_param = room.LookupParameter("בניין")
-            room_building = room_building_param.AsString() if room_building_param else None
-            room_level = doc.GetElement(room.LevelId).Name
-            debug_messages.append(f"No geometry found for room ID: {room_id.IntegerValue} - Building: {room_building}, Level: {room_level}, Name: {room_name}, Number: {room_number}")
-
-        # Create DataFrames from the collected data
-        df_relationships = pd.DataFrame(relationships)
-        df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
-        df_complex_shape_rooms = pd.DataFrame(complex_shape_rooms)
-
-        # Sort the relationships DataFrame
-        if not df_relationships.empty:
-            df_relationships = df_relationships.sort_values(
-                by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
-                key=lambda x: x.map(custom_sort_key)
-            )
-        
-        # Change Ceiling_Description to Room_Ceiling_Finish by rules, store the original value in Ceiling_Description_Old
-        if not df_relationships.empty:
-            df_relationships.loc[(df_relationships['Ceiling_Description'] == '"פלב"מ "ריגיד') & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'פנל מבודד צבוע'), 'Ceiling_Description'] = 'פנל מבודד צבוע'
-            df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'] = 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'
-            df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'] = 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'
-
-        # Sort the unrelated ceilings DataFrame
-        if not df_unrelated.empty:
-            df_unrelated = df_unrelated.sort_values(
-                by=['Ceiling_Level', 'Ceiling_Description'],
-                key=lambda x: x.map(custom_sort_key)
-            )
-
-        # Sort the complex shape rooms DataFrame
-        if not df_complex_shape_rooms.empty:
-            df_complex_shape_rooms = df_complex_shape_rooms.sort_values(
-                by=['Room_Building', 'Room_Level', 'Room_Number'],
-                key=lambda x: x.map(custom_sort_key)
-            )
+        df_relationships, df_unrelated, df_complex_shape_rooms = sort_and_update_dataframes(
+            df_relationships, df_unrelated, df_complex_shape_rooms
+        )
 
         return df_relationships, df_unrelated, df_complex_shape_rooms
+
     except Exception as e:
-        debug_messages.append(f"Error (internal) in find_ceiling_room_relationships: {e}")
-        debug_messages.append(traceback.format_exc())
+        logging.exception(f"Error in find_ceiling_room_relationships: {e}")
         raise
+
+# def find_ceiling_room_relationships_old(room_elements, ceiling_elements, building_A_levels, building_B_levels, common_levels, prefix, timestamp):
+#     """
+#     Find the relationship between ceilings and rooms based on the two vectors.
+    
+#     Args:
+#         room_elements (list): List of room elements.
+#         ceiling_elements (list): List of ceiling elements.
+#     Returns:
+#         tuple: Two pandas DataFrames - one for related ceilings and rooms, one for unrelated ceilings.
+#     """
+#     try:
+#         relationships = []
+#         unrelated_ceilings = []
+#         complex_shape_rooms = []
+#         no_geometry_rooms = []
+#         no_geometry_ceilings = []
+        
+#         building_levels = [building_A_levels, building_B_levels, common_levels]
+
+#         start_time = datetime.datetime.now() # Start time for performance measurement
+
+#         # notification_counter = 0
+
+#         for i, ceiling in enumerate(ceiling_elements, 1):
+#             ceiling_start_time = datetime.datetime.now() # Start time for performance measurement
+
+#             ceiling_id = ceiling.Id
+#             ceiling_details = get_ceiling_details(ceiling)
+            
+#             # Check if the ceiling has geometry
+#             if not get_element_geometry(ceiling_id):
+#                 logging.exception(f"No geometry found for ceiling ID: {ceiling_id.IntegerValue}")
+#                 logging.exception(traceback.format_exc())
+#                 unrelated_ceilings.append(ceiling_details)
+#                 no_geometry_ceilings.append(ceiling_id)
+#                 continue
+            
+#             direct_intersections = []
+#             xy_intersections = []
+
+#             # Iterate through all rooms to find intersections with the current ceiling
+#             for j, room in enumerate(room_elements, 1):
+#                 room_start_time = datetime.datetime.now() # Start time for performance measurement
+#                 room_id = room.Id
+#                 room_details = get_room_details(room)
+                
+#                 # Skip rooms without valid geometry
+#                 if not get_element_geometry(room_id):
+#                     if room_id not in no_geometry_rooms:
+#                         no_geometry_rooms.append(room_id)
+#                     continue
+                
+#                 # Check for direct intersection
+#                 try:
+#                     direct_intersection = check_direct_intersection(room_id, ceiling_id, prefix, timestamp)
+#                     # if not direct_intersection:
+#                     #     logging.exception(f"Direct intersection: {direct_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
+#                     # print(f"Direct intersection: {direct_intersection}")
+#                 except Exception as e:
+#                     logging.exception(f"Error in direct intersection check: {e}")
+#                     logging.exception(traceback.format_exc())
+#                     direct_intersection = False
+                
+#                 # Check for XY projection intersection
+#                 xy_intersection = project_and_check_xy_intersection(room_id, ceiling_id) if not direct_intersection else True
+#                 # if not xy_intersection:
+#                 #     logging.exception(f"XY projection intersection: {xy_intersection} for room ID: {room_id.IntegerValue}, ceiling ID: {ceiling_id.IntegerValue}")
+                
+#                 # If there's any kind of intersection, calculate the area and add to matched_rooms
+#                 if direct_intersection or xy_intersection:
+#                     intersection_area_3d, intersection_area_xy, is_complex_shape = calculate_intersection_areas(room_id, ceiling_id)
+#                     # logging.exception(f"Intersection areas: 3D - {intersection_area_3d}, XY - {intersection_area_xy}, Complex shape - {is_complex_shape}")
+#                     distance = delta_ceiling_above_room(room_id, ceiling_id)
+#                     # logging.exception(f"Distance: {distance}")
+#                     if is_complex_shape:
+#                         complex_shape_rooms.append({
+#                             'Room_ID': room_details[0],
+#                             'Room_Name': room_details[1],
+#                             'Room_Number': room_details[2],
+#                             'Room_Level': room_details[3],
+#                             'Room_Building': room_details[4],
+#                             'Room_Area_sqm (* 1.05)': room_details[6] * 1.05,
+#                             'Room_Ceiling_Finish': room_details[5],
+#                             'Ceiling_ID': ceiling_details[0],
+#                             'Ceiling_Level': ceiling_details[3],
+#                             'Ceiling_Description': ceiling_details[1],
+#                             'Ceiling_Description_Old': ceiling_details[1],
+#                             'Ceiling_Area_sqm (* 1.3)': ceiling_details[2] * 1.3,
+#                             'Intersection_Area_3D_sqm': intersection_area_3d,
+#                             'Intersection_Area_XY_sqm': intersection_area_xy,
+#                             'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
+#                             'Direct_Intersection': direct_intersection,
+#                             'XY_Projection_Intersection': xy_intersection,
+#                             'Distance': distance
+#                         })
+#                         continue  # Skip adding to relationships
+#                     room_data = {
+#                         'Ceiling_ID': ceiling_details[0],
+#                         'Ceiling_Description': ceiling_details[1],
+#                         'Ceiling_Description_Old': ceiling_details[1],
+#                         'Room_Ceiling_Finish': room_details[5],
+#                         'Ceiling_Area_sqm': ceiling_details[2],
+#                         'Ceiling_Level': ceiling_details[3],
+#                         'Room_ID': room_details[0],
+#                         'Room_Name': room_details[1],
+#                         'Room_Number': room_details[2],
+#                         'Room_Level': room_details[3],
+#                         'Room_Building': room_details[4],
+#                         'Room_Area_sqm': room_details[6],
+#                         'Intersection_Area_3D_sqm': intersection_area_3d,
+#                         'Intersection_Area_XY_sqm': intersection_area_xy,
+#                         'Intersection_Area_sqm': max(intersection_area_3d, intersection_area_xy),
+#                         'Direct_Intersection': direct_intersection,
+#                         'XY_Projection_Intersection': xy_intersection,
+#                         'Distance': distance
+#                     }
+#                     if direct_intersection:
+#                         direct_intersections.append(room_id)
+#                         relationships.append(room_data) #immidiatly add direct intersections to the relationships
+#                     elif xy_intersection:
+#                         xy_intersections.append(room_data)
+
+#                 # if notification_counter % 200 == 0:  
+#                 #     elapsed_time = (datetime.datetime.now() - start_time).total_seconds()
+#                 #     processing_time = (datetime.datetime.now() - room_start_time).total_seconds()
+#                 #     ceiling_digits = len(str(len(ceiling_elements)))
+#                 #     room_digits = len(str(len(room_elements)))
+#                 #     print(f"Processing pair c{i:{ceiling_digits}d}/{len(ceiling_elements)}   r{j:{room_digits}d}/{len(room_elements)}")
+                
+#                 # notification_counter += 1
+#                 elapsed_time = (datetime.datetime.now() - start_time).total_seconds()
+#                 avg_processing_time = elapsed_time / i / j
+
+#             # distances = [(room['Room_ID'], room['Distance']) for room in matched_rooms]
+
+#             # If there are no direct intersections, process the XY intersections
+#             if xy_intersections:
+#                 # Filter out rooms with negative or zero distance
+#                 positive_distance_rooms = [room for room in xy_intersections if room['Distance'] >= 0]
+#                 # logging.exception(f"Positive distance rooms: {len(positive_distance_rooms)}")
+#                 # Calculate level distances once
+#                 level_distances = calculate_max_level_heights(doc, building_levels)
+
+#                 if positive_distance_rooms:
+#                     # Find the smallest positive distance
+#                     min_positive_distance = min(room['Distance'] for room in positive_distance_rooms)
+#                     room_with_min_distance = min(positive_distance_rooms, key=lambda x: x['Distance'])
+#                     min_distance_level = doc.GetElement(ElementId(room_with_min_distance['Room_ID'])).LevelId
+                    
+#                     filtered_rooms = [
+#                         room for room in positive_distance_rooms
+#                         if doc.GetElement(ElementId(room['Room_ID'])).LevelId == min_distance_level
+#                     ]
+
+#                     leveled_rooms = []
+
+#                     for room in filtered_rooms:
+#                         if room['Room_Building'] == "A":
+#                             # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[0]}")
+#                             if room['Distance'] <= level_distances[0]:
+#                                 leveled_rooms.append(room)
+#                         if room['Room_Building'] == "B":
+#                             # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[1]}")
+#                             if room['Distance'] <= level_distances[1]:
+#                                 leveled_rooms.append(room)
+#                         else:
+#                             # print(f"Room ID: {room['Room_ID']}, Number: {room['Room_Number']}, Name: {room['Room_Name']}, Distance: {room['Distance']}, Level: {room['Room_Level']}, Ceiling ID: {room['Ceiling_ID']}, Ceiling Level: {room['Ceiling_Level']}, max allowed: {level_distances[2]}")
+#                             if room['Distance'] <= level_distances[2]:
+#                                 leveled_rooms.append(room)
+                    
+#                     if not leveled_rooms:
+#                         logging.exception(f"Ceiling ID {ceiling_id.IntegerValue} has no rooms in the same level with positive distance to it")
+#                         continue
+#                     else:
+#                         relationships.extend(leveled_rooms)
+#                 else:
+#                     logging.exception(f"Ceiling ID {ceiling_id.IntegerValue} has no positive distance to any room in xy projections")
+
+#             # If no rooms intersect with the ceiling, mark the ceiling as unrelated
+#             if not direct_intersections and not xy_intersections:
+#                 unrelated_ceilings.append(ceiling_details)
+
+#             current_time = datetime.datetime.now()
+#             elapsed_time = (current_time - start_time).total_seconds()
+#             total_time_expected = elapsed_time / i * len(ceiling_elements)
+#             percent = (elapsed_time / total_time_expected) * 100 if total_time_expected > 0 else 0
+#             time_to_finish = total_time_expected - elapsed_time
+#             print(f"Time to finish: {abs(time_to_finish):.2f}s ({percent:.2f}%);   Elapsed time: {elapsed_time:.2f}s;    Avg. processing time: {avg_processing_time:.4f}s")
+
+#         # Collect debug messages for rooms without geometry
+#         for room_id in no_geometry_rooms:
+#             room = doc.GetElement(room_id)
+#             room_name = room.get_Parameter(BuiltInParameter.ROOM_NAME).AsString()
+#             room_number = room.get_Parameter(BuiltInParameter.ROOM_NUMBER).AsString()
+#             room_building_param = room.LookupParameter("בניין")
+#             room_building = room_building_param.AsString() if room_building_param else None
+#             room_level = doc.GetElement(room.LevelId).Name
+#             logging.exception(f"No geometry found for room ID: {room_id.IntegerValue} - Building: {room_building}, Level: {room_level}, Name: {room_name}, Number: {room_number}")
+
+#         # Create DataFrames from the collected data
+#         df_relationships = pd.DataFrame(relationships)
+#         df_unrelated = pd.DataFrame(unrelated_ceilings, columns=['Ceiling_ID', 'Ceiling_Description', 'Ceiling_Area_sqm', 'Ceiling_Level'])
+#         df_complex_shape_rooms = pd.DataFrame(complex_shape_rooms)
+
+#         # Sort the relationships DataFrame
+#         if not df_relationships.empty:
+#             df_relationships = df_relationships.sort_values(
+#                 by=['Room_Building', 'Room_Level', 'Room_Number', 'Ceiling_Description'],
+#                 key=lambda x: x.map(custom_sort_key)
+#             )
+        
+#         # Change Ceiling_Description to Room_Ceiling_Finish by rules, store the original value in Ceiling_Description_Old
+#         if not df_relationships.empty:
+#             df_relationships.loc[(df_relationships['Ceiling_Description'] == '"פלב"מ "ריגיד') & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'פנל מבודד צבוע'), 'Ceiling_Description'] = 'פנל מבודד צבוע'
+#             df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'] = 'פורניר  ע"ג MDF  גודל 60/60 בשילוב סינורי גבס'
+#             df_relationships.loc[(df_relationships['Ceiling_Description'] == "תקרת פח מחורר/אקופון 60/60 אדוונטיג' בשילוב סינורי גבס") & (df_relationships['Intersection_Area_sqm'] > 0) & (df_relationships['Intersection_Area_sqm'] / df_relationships['Ceiling_Area_sqm'] > 0.09) & (df_relationships['Room_Ceiling_Finish'] == 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'), 'Ceiling_Description'] = 'תקרת פח מחורר 60/60 בשילוב סינורי גבס'
+
+#         # Sort the unrelated ceilings DataFrame
+#         if not df_unrelated.empty:
+#             df_unrelated = df_unrelated.sort_values(
+#                 by=['Ceiling_Level', 'Ceiling_Description'],
+#                 key=lambda x: x.map(custom_sort_key)
+#             )
+
+#         # Sort the complex shape rooms DataFrame
+#         if not df_complex_shape_rooms.empty:
+#             df_complex_shape_rooms = df_complex_shape_rooms.sort_values(
+#                 by=['Room_Building', 'Room_Level', 'Room_Number'],
+#                 key=lambda x: x.map(custom_sort_key)
+#             )
+
+#         return df_relationships, df_unrelated, df_complex_shape_rooms
+#     except Exception as e:
+#         logging.exception(f"Error (internal) in find_ceiling_room_relationships: {e}")
+#         logging.exception(traceback.format_exc())
+#         raise
 
 def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shape_rooms):
     """
@@ -741,7 +1242,6 @@ def find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shap
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
         room_elements (list): List of all room elements.
         df_complex_shape_rooms (pandas.DataFrame): DataFrame containing complex shape rooms.
-    
     Returns:
         pandas.DataFrame: DataFrame containing rooms without ceilings.
     """
@@ -803,7 +1303,6 @@ def pivot_data(df_relationships):
    
     Args:
         df_relationships (pandas.DataFrame): DataFrame containing ceiling-room relationships.
-   
     Returns:
         pandas.DataFrame: Grouped DataFrame with rooms and all associated ceiling information.
     """
@@ -867,6 +1366,8 @@ def adjust_column_widths(ws):
     '''
     Adjust the column widths in the worksheet based on the content.
 
+    Args:
+        ws (openpyxl.worksheet.worksheet.Worksheet): The worksheet to adjust.
     '''
     for column in ws.columns:
         max_length = 0
@@ -881,6 +1382,12 @@ def adjust_column_widths(ws):
         ws.column_dimensions[column_letter].width = adjusted_width
 
 def apply_header_format(ws):
+    '''
+    Apply formatting to the header row in the worksheet.
+
+    Args:
+        ws (openpyxl.worksheet.worksheet.Worksheet): The worksheet to format.
+    '''
     for cell in ws[1]:
         # Apply formatting to the header row
         cell.font = Font(bold=True)
@@ -905,54 +1412,72 @@ def clear_all_lru_caches():
         func.cache_clear()
 
 def main():
-    """
-    Main function to execute the script.
-    """
     clear_all_lru_caches()
+
+    # Initialize timestamp
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Collect file name for excel name prefix
+    file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
+    prefix = f"{file_name[0]}_{file_name[1]}"
+
+    setup_logging(prefix, timestamp)
+
+    try:
+        output_dir = os.path.join("C:", "Mac", "Home", "Documents", "Shapir", "Exports", prefix, timestamp)
+        os.makedirs(output_dir, exist_ok=True)
+    except Exception as e:
+        logging.exception(f"Error in creating output directory: {e}")
+
     try:
         # Collect room and ceiling elements
-        # room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
-        # ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
+        room_elements = FilteredElementCollector(doc).OfClass(SpatialElement).OfCategory(BuiltInCategory.OST_Rooms).ToElements()
+        ceiling_elements = FilteredElementCollector(doc).OfClass(Ceiling).ToElements()
 
         # For testing purposes, use a subset of rooms and ceilings
-        room_elements = [doc.GetElement(ElementId(1686235))]
-        ceiling_elements = [doc.GetElement(ElementId(2523734))]
-
-        # Collect file name for excel name prefix
-        file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
-        prefix = f"{file_name[0]}_{file_name[1]}"
+        # room_elements = [doc.GetElement(ElementId(1686235))]
+        # ceiling_elements = [doc.GetElement(ElementId(2523734))]
 
         # Find the relationships between ceilings and rooms
         try:
-            df_relationships, df_unrelated, df_complex_shape = find_ceiling_room_relationships(room_elements, ceiling_elements)
+            # C AB:
+            building_A_levels = {ElementId(6533282), ElementId(694), ElementId(6568872)}  # 00, 01A, RF
+            building_B_levels = {ElementId(8968108), ElementId(9048752), ElementId(9057595)}  # B 00, B 01, B RF
+            common_levels = {ElementId(311)}  # -0.5
+
+            # S AB:
+            # building_A_levels = {}
+            # building_B_levels = {}
+            # common_levels = {ElementId(2003554), ElementId(13071), ElementId(15913), ElementId(1764693), ElementId(2102106)} # -1, 00, 01, 02, 03
+
+            df_relationships, df_unrelated, df_complex_shape = find_ceiling_room_relationships(room_elements, ceiling_elements, building_A_levels, building_B_levels, common_levels, prefix, timestamp)
         except Exception as e:
-            debug_messages.append(f"Error in find_ceiling_room_relationships: {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in find_ceiling_room_relationships: {e}")
+            logging.exception(traceback.format_exc())
 
         # Pivot the relationships data
         try:
             df_grouped = pivot_data(df_relationships)
         except Exception as e:
-            debug_messages.append(f"Error in pivot_data (relationships): {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in pivot_data (relationships): {e}")
+            logging.exception(traceback.format_exc())
 
         # Pivot the complex shape rooms data
         try:
             df_complex_shape = pivot_data(df_complex_shape)
         except Exception as e:
-            debug_messages.append(f"Error in pivot_data (complex shape rooms): {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in pivot_data (complex shape rooms): {e}")
+            logging.exception(traceback.format_exc())
 
         # Find rooms without ceilings
         try:
             df_rooms_without_ceilings = find_rooms_without_ceilings(df_relationships, room_elements, df_complex_shape)
         except Exception as e:
-            debug_messages.append(f"Error in find_rooms_without_ceilings: {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in find_rooms_without_ceilings: {e}")
+            logging.exception(traceback.format_exc())
         
         # Output the dataframe to Excel with timestamp
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{prefix}_ceiling_room_relationships_{timestamp}.xlsx"
+        output_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{prefix}\\{timestamp}\\ceiling_room_relationships.xlsx"
 
         try:
             # Export to Excel with formatting
@@ -980,32 +1505,20 @@ def main():
             for sheet_name in wb.sheetnames:
                 adjust_column_widths(wb[sheet_name])
         except Exception as e:
-            debug_messages.append(f"Error in saving to Excel: {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in saving to Excel: {e}")
+            logging.exception(traceback.format_exc())
 
         # Save the workbook
         try:
             wb.save(output_file_path)
             print(f"Schedule saved to {output_file_path}")
         except Exception as e:
-            debug_messages.append(f"Error in saving workbook: {e}")
-            debug_messages.append(traceback.format_exc())
+            logging.exception(f"Error in saving workbook: {e}")
+            logging.exception(traceback.format_exc())
 
     except Exception as e:
-        debug_messages.append(f"Error in main function: {e}")
-        debug_messages.append(traceback.format_exc())
-    
-
-    # Save debug messages to a text file
-    try:
-        debug_file_path = f"C:\\Mac\\Home\\Documents\\Shapir\\Exports\\{prefix}_debug_messages_{timestamp}.txt"
-        with open(debug_file_path, 'w', encoding='utf-8') as f:
-            for item in debug_messages:
-                f.write("%s\n" % item)
-        print(f"Debug messages saved to {debug_file_path}")
-    except Exception as e:
-        print(f"Error in saving debug messages: {e}")
-        print(traceback.format_exc())
+        logging.exception(f"Error in main function: {e}")
+        logging.exception(traceback.format_exc())
     
     clear_all_lru_caches()
 
