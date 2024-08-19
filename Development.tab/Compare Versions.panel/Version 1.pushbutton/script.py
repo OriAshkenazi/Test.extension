@@ -43,51 +43,6 @@ def clear_all_lru_caches():
     for func in lru_cached_functions:
         func.cache_clear()
 
-def progress_tracker(total_elements):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            start_time = time.time()
-            estimated_times = []
-            use_estimated_time = False
-           
-            def update_progress(i, force_print=False):
-                nonlocal use_estimated_time
-               
-                current_time = time.time()
-                total_elapsed_time = current_time - start_time
-                progress = i / total_elements * 100
-               
-                if i > 1:  # Skip estimation for the first element
-                    estimated_time_remaining = (total_elapsed_time / i) * (total_elements - i)
-                    estimated_times.append(estimated_time_remaining)
-                   
-                    # Check negative gradient over last 800 elements
-                    if len(estimated_times) >= 800:
-                        if all(estimated_times[-j] < estimated_times[-j-1] + 0.5 for j in range(1, 800)) and not use_estimated_time:
-                            use_estimated_time = True
-                            print("Switching to estimated time remaining...")
-                        estimated_times.pop(0)  # Remove oldest estimate to maintain 800 elements
-                   
-                    time_remaining = estimated_time_remaining if use_estimated_time else max(0, 360 - total_elapsed_time)
-                   
-                    if force_print or i % 400 == 0 or i == total_elements:
-                        print(f"Progress: {progress:.2f}% ({i}/{total_elements} elements) | "
-                              f"Time elapsed: {total_elapsed_time:.2f}s | "
-                              f"Time remaining: {time_remaining:.2f}s")
-
-            # Create a generator that yields elements
-            def element_counter():
-                elements = FilteredElementCollector(args[0]).WhereElementIsNotElementType().ToElements()
-                for i, element in enumerate(elements, 1):
-                    yield element
-                    update_progress(i, force_print=(i % 400 == 0 or i == total_elements))
-
-            # Pass the generator to the wrapped function
-            return func(*args, element_counter=element_counter(), **kwargs)
-        return wrapper
-    return decorator
-
 def get_category_family_type_names(element: Element, doc: Document) -> tuple:
     """
     Get the family and type names of an element, along with Type ID and additional type info.
