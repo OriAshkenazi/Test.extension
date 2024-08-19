@@ -88,6 +88,53 @@ def progress_tracker(total_elements):
         return wrapper
     return decorator
 
+def get_family_and_type_names(element, doc):
+    '''
+    Get the family and type names of an element, along with Type ID and additional type info.
+    Args:
+        element (Element): The element to get the names from.
+        doc (Document): The Revit document.
+    Returns:
+        tuple: A tuple containing the family name, type name, type ID, and additional type info.
+    '''
+    try:
+        family_name = "Unknown Family"
+        type_name = "Unknown Type"
+        type_id = "Unknown Type ID"
+        additional_info = "No additional info"
+
+        # Get element type
+        element_type = doc.GetElement(element.GetTypeId())
+        
+        if element_type is not None:
+            # Get type name
+            type_name_param = element_type.get_Parameter(BuiltInParameter.SYMBOL_NAME_PARAM)
+            if type_name_param and type_name_param.HasValue:
+                type_name = type_name_param.AsString()
+            
+            # Get type ID
+            type_id = str(element_type.Id.IntegerValue)
+
+            # Get family name
+            if isinstance(element, FamilyInstance):
+                family = element.Symbol.Family
+                if family:
+                    family_name = family.Name
+            elif hasattr(element_type, 'FamilyName'):
+                family_name = element_type.FamilyName
+        
+        # If family name is still unknown, use category name
+        if family_name == "Unknown Family" and element.Category:
+            family_name = element.Category.Name
+
+        # Get additional type info
+        additional_info = get_additional_type_info(element_type)
+
+        return family_name, type_name, type_id, additional_info
+
+    except Exception as e:
+        return "Error Family", "Error Type", "Error Type ID", "Error getting info"
+
 def get_category_family_type_names(element: Element, doc: Document) -> tuple:
     """
     Get the family and type names of an element, along with Type ID and additional type info.
@@ -177,6 +224,30 @@ def get_additional_type_info(element_type):
 
     return " | ".join(additional_info) if additional_info else "No additional info"
 
+def get_all_parameters(element):
+    '''
+    Get all parameters of an element as a list of strings.
+
+    Args:
+        element (Element): The element to get the parameters for.
+    Returns:
+        list: A list of strings containing the parameter names and values.
+    '''
+    params = []
+    try:
+        for param in element.Parameters:
+            try:
+                if param.HasValue:
+                    value = param.AsValueString() or param.AsString() or str(param.AsDouble())
+                else:
+                    value = "No Value"
+                params.append(f"{param.Definition.Name}: {value}")
+            except Exception as e:
+                params.append(f"{param.Definition.Name}: Error - {str(e)}")
+    except Exception as e:
+        params.append(f"Error getting parameters: {str(e)}")
+    return params
+
 def get_element_parameters(element):
     parameters = {}
     category = element.Category
@@ -250,7 +321,194 @@ def get_element_parameters(element):
 
     return parameters
 
-def get_type_metrics(doc):
+def calculate_element_metrics(element, doc):
+    '''
+    Calculate the area, volume, and length of an element.
+
+    Args:
+        element (Element): The element to calculate the metrics for.
+        doc (Document): The Revit document.
+    Returns:
+        dict: A dictionary containing the calculated metrics.
+        list: A list of strings containing debug information.
+    '''
+    metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
+    errors = [f"Element ID: {element.Id.IntegerValue}"]
+   
+    try:
+        category = element.Category
+        if category:
+            category_name = category.Name
+            errors.append(f"Category: {category_name}")
+            category_id = category.Id.IntegerValue
+        else:
+            errors.append("Category: None")
+            category_id = -1
+
+        # Try to get general parameters first
+        length_param = element.get_Parameter(BuiltInParameter.INSTANCE_LENGTH_PARAM)
+        area_param = element.get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)
+        volume_param = element.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)
+        
+        if length_param and length_param.HasValue:
+            metrics['length'] = length_param.AsDouble()
+        if area_param and area_param.HasValue:
+            metrics['area'] = area_param.AsDouble()
+        if volume_param and volume_param.HasValue:
+            metrics['volume'] = volume_param.AsDouble()
+
+        # Specific element handling
+        if isinstance(element, Wall):
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
+        elif isinstance(element, (Floor, Ceiling, RoofBase)):
+            pass  # Already handled by general parameters
+        # elif isinstance(element, FamilyInstance):
+        #     bbox = element.get_BoundingBox(None)
+        #     if bbox:
+        #         metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
+        elif isinstance(element, FamilyInstance):
+            # Check if the element is a pile (typically a structural framing category)
+            if category_id == int(BuiltInCategory.OST_StructuralFraming):
+                pile_depth_param = element.get_Parameter(BuiltInParameter.STRUCTURAL_FRAME_CUT_LENGTH)
+                if pile_depth_param and pile_depth_param.HasValue:
+                    metrics['length'] = pile_depth_param.AsDouble()
+                else:
+                    # If STRUCTURAL_FRAME_CUT_LENGTH is not available, try to calculate from location curve
+                    location = element.Location
+                    if isinstance(location, LocationCurve):
+                        metrics['length'] = location.Curve.Length
+                
+                errors.append(f"Pile depth: {metrics['length']}")
+            else:
+                # For non-pile family instances, use bounding box for length
+                bbox = element.get_BoundingBox(None)
+                if bbox:
+                    metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
+        elif category_id == int(BuiltInCategory.OST_Rooms):
+            room_area_param = element.get_Parameter(BuiltInParameter.ROOM_AREA)
+            room_volume_param = element.get_Parameter(BuiltInParameter.ROOM_VOLUME)
+            if room_area_param and room_area_param.HasValue:
+                metrics['area'] = room_area_param.AsDouble()
+            if room_volume_param and room_volume_param.HasValue:
+                metrics['volume'] = room_volume_param.AsDouble()
+        elif category_id == int(BuiltInCategory.OST_Stairs):
+            stair_length_param = element.get_Parameter(BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
+            if stair_length_param and stair_length_param.HasValue:
+                metrics['length'] = stair_length_param.AsDouble()
+        elif category_id == int(BuiltInCategory.OST_Railings):
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
+
+        # Revit 2019
+        # Convert units (assuming input is in imperial units)
+        # metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], DisplayUnitType.DUT_SQUARE_METERS)
+        # metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], DisplayUnitType.DUT_CUBIC_METERS)
+        # metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], DisplayUnitType.DUT_METERS)
+
+        # Revit 2023
+        # Convert units (assuming input is in internal units)
+        metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
+        metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], ForgeTypeId.FromString("autodesk.spec.aec:squareMeters-1.0.1"))
+        metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], ForgeTypeId.FromString("autodesk.spec.aec:cubicMeters-1.0.1"))
+
+        errrors.extend(get_all_parameters(element))
+
+        for metric, value in metrics.items():
+            errors.append(f"{metric.capitalize()}: {value:.2f}")
+
+    except Exception as e:
+        errors.append(f"Error calculating metrics: {str(e)}")
+        errors.append(traceback.format_exc())
+
+    return metrics, errors
+
+@progress_tracker(total_elements=FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount())
+def get_type_metrics_older(doc, element_counter=None):
+    '''
+    Get the metrics for each unique element type in the document.
+
+    Args:
+        doc (Document): The Revit document.
+        element_counter (generator): A generator that yields elements.
+    Returns:
+        dict: A dictionary containing the metrics for each unique element type.
+        list: A list of strings containing errors encountered during processing.
+        int: The total number of elements processed
+    '''
+    metrics = defaultdict(lambda: {'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 'additional_info': '', 'debug_info': []})
+    
+    errors = []
+    processed_elements = 0
+    
+    for element in (element_counter or FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()):
+        try:
+            family_name, type_name, type_id, additional_info = get_family_and_type_names(element, doc)
+            key = (family_name, type_name)
+            
+            metrics[key]['count'] += 1
+            metrics[key]['type_id'] = type_id
+            metrics[key]['additional_info'] = additional_info
+            
+            element_metrics, debug_info = calculate_element_metrics(element, doc)
+            
+            for metric, value in element_metrics.items():
+                if value is not None:
+                    metrics[key][metric] += value
+            
+            if not metrics[key]['debug_info']:
+                metrics[key]['debug_info'] = debug_info
+            
+            processed_elements += 1
+        
+        except Exception as e:
+            error_msg = f"Error processing element {element.Id} from document '{doc.Title}': {str(e)}\n{traceback.format_exc()}"
+            if error_msg not in errors:
+                errors.append(error_msg)
+    
+    return metrics, errors, processed_elements
+
+def get_type_metrics_older(doc):
+    metrics = defaultdict(lambda: {'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 'additional_info': '', 'debug_info': [], 'category':''})
+    errors = []
+    processed_elements = 0
+    
+    total_elements = FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount()
+    
+    def element_processor():
+        nonlocal processed_elements
+        for element in FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements():
+            try:
+                category_name, family_name, type_name, type_id, additional_info = get_category_family_type_names(element, doc)
+                key = (family_name, type_name)
+                
+                metrics[key]['count'] += 1
+                metrics[key]['type_id'] = type_id
+                metrics[key]['additional_info'] = additional_info
+                metrics[key]['category'] = category_name
+                
+                element_metrics, debug_info = calculate_element_metrics(element, doc)
+                
+                for metric, value in element_metrics.items():
+                    if value is not None:
+                        metrics[key][metric] += value
+                
+                if not metrics[key]['debug_info']:
+                    metrics[key]['debug_info'] = debug_info
+                
+                processed_elements += 1
+                yield processed_elements, total_elements
+            
+            except Exception as e:
+                error_msg = f"Error processing element {element.Id} from document '{doc.Title}': {str(e)}\n{traceback.format_exc()}"
+                if error_msg not in errors:
+                    errors.append(error_msg)
+    
+    return metrics, errors, element_processor()
+
+def get_type_metrics_old(doc):
     metrics = defaultdict(lambda: {
         'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 
         'additional_info': '', 'debug_info': [], 'category': '', 
@@ -374,6 +632,70 @@ def calculate_element_metrics(element, doc):
         errors.append(traceback.format_exc())
 
     return metrics, errors
+
+def compare_models_old(current_doc, old_doc_path):
+    '''
+    Compare the types between the current and old models.
+
+    Args:
+        current_doc (Document): The current Revit document.
+        old_doc_path (str): The path to the old Revit model file.
+    Returns:
+        tuple: A tuple containing a list of dictionaries with comparison data and a list of errors.
+    '''
+    app = current_doc.Application
+    all_errors = []
+
+    print("Processing current model...")
+    current_metrics, current_errors, current_processed = get_type_metrics(current_doc)
+    all_errors.extend(current_errors)
+    print(f"Processed {current_processed} elements in the current model.")
+
+    print("\nProcessing old model...")
+    try:
+        old_doc = app.OpenDocumentFile(old_doc_path)
+        old_metrics, old_errors, old_processed = get_type_metrics(old_doc)
+        all_errors.extend(old_errors)
+        print(f"Processed {old_processed} elements in the old model.")
+        old_doc.Close(False)
+    except Exception as e:
+        all_errors.append(f"Error opening old document: {str(e)}")
+        return [], all_errors
+
+    if current_metrics is None or old_metrics is None:
+        all_errors.append("Error: Failed to process one or both models.")
+        return [], all_errors
+
+    all_types = set(current_metrics.keys()) | set(old_metrics.keys())
+
+    comparison_data = []
+    for key in all_types:
+        if key is None:
+            continue  # Skip None keys
+        family_name, type_name = key
+        current = current_metrics.get(key, {'count': 0, 'area': 0, 'volume': 0, 'length': 0})
+        old = old_metrics.get(key, {'count': 0, 'area': 0, 'volume': 0, 'length': 0})
+
+        comparison_data.append({
+            'Family': family_name,
+            'Type': type_name,
+            'Type ID': current.get('type_id', 'N/A'),
+            'Additional Info': current.get('additional_info', 'N/A'),
+            'Current Count': current['count'],
+            'Old Count': old['count'],
+            'Count Diff': current['count'] - old['count'],
+            'Current Area': current['area'],
+            'Old Area': old['area'],
+            'Area Diff': current['area'] - old['area'],
+            'Current Volume': current['volume'],
+            'Old Volume': old['volume'],
+            'Volume Diff': current['volume'] - old['volume'],
+            'Current Length': current['length'],
+            'Old Length': old['length'],
+            'Length Diff': current['length'] - old['length']
+        })
+
+    return comparison_data, all_errors, all_types
 
 def compare_models(current_doc, old_doc_path):
     app = current_doc.Application
