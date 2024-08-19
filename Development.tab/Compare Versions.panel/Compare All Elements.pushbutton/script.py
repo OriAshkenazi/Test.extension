@@ -580,9 +580,9 @@ def create_excel_report(comparison_data, output_path):
     for row in ws_details.iter_rows(min_row=2, max_row=ws_details.max_row, min_col=6, max_col=21):
         for cell in row:
             if cell.column in [9, 13, 17, 21]:  # Percentage columns
-                cell.number_format = '0.00%'
+                cell.number_format = '0%'
             else:
-                cell.number_format = '0.00'
+                cell.number_format = '0.0'
 
     # Adjust column widths for details worksheet
     for column in ws_details.columns:
