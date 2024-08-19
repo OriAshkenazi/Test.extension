@@ -7,6 +7,7 @@ import time
 import traceback
 import io
 from collections import defaultdict
+from typing import Tuple, Dict, List
 from functools import wraps, lru_cache
 
 clr.AddReference('RevitAPI')
@@ -20,10 +21,10 @@ from System.Windows.Forms import FolderBrowserDialog, DialogResult
 from System.Collections.Generic import List
 
 import System
+import datetime
 import openpyxl
 from openpyxl.styles import Font, Alignment
-from openpyxl.worksheet.sorting import SortState
-import datetime
+from tqdm import tqdm
 
 # Get the Revit application and document
 uidoc = __revit__.ActiveUIDocument
@@ -144,7 +145,6 @@ def get_element_parameters(element):
 
     # Common parameters for most categories
     common_params = [
-        ("GUID", BuiltInParameter.ELEMENT_GUID),
         ("Element ID", BuiltInParameter.ID_PARAM),
         ("Area", BuiltInParameter.HOST_AREA_COMPUTED),
         ("Assembly Description", BuiltInParameter.UNIFORMAT_DESCRIPTION),
@@ -205,52 +205,16 @@ def get_element_parameters(element):
 
     return parameters
 
-def get_type_metrics(doc):
-    metrics = defaultdict(lambda: {
-        'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 
-        'additional_info': '', 'debug_info': [], 'category': '', 
-        'parameters': {}
-    })
-    errors = []
-    processed_elements = 0
-    
-    total_elements = FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount()
-    
-    def element_processor():
-        nonlocal processed_elements
-        for element in FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements():
-            try:
-                category_name, family_name, type_name, type_id, additional_info = get_category_family_type_names(element, doc)
-                key = (family_name, type_name)
-                
-                metrics[key]['count'] += 1
-                metrics[key]['type_id'] = type_id
-                metrics[key]['additional_info'] = additional_info
-                metrics[key]['category'] = category_name
-                
-                element_metrics, debug_info = calculate_element_metrics(element, doc)
-                
-                for metric, value in element_metrics.items():
-                    if value is not None:
-                        metrics[key][metric] += value
-                
-                if not metrics[key]['debug_info']:
-                    metrics[key]['debug_info'] = debug_info
-                
-                # Add parameter information
-                metrics[key]['parameters'] = get_element_parameters(element)
-                
-                processed_elements += 1
-                yield processed_elements, total_elements
-            
-            except Exception as e:
-                error_msg = f"Error processing element {element.Id} from document '{doc.Title}': {str(e)}\n{traceback.format_exc()}"
-                if error_msg not in errors:
-                    errors.append(error_msg)
-    
-    return metrics, errors, element_processor()
+def get_parameter_value(element, param_id: BuiltInParameter) -> float:
+    '''
+    Helper function to get a parameter value safely.
+    '''
+    param = element.get_Parameter(param_id)
+    if param and param.HasValue:
+        return param.AsDouble()
+    return 0.0
 
-def calculate_element_metrics(element, doc):
+def calculate_element_metrics_old(element, doc):
     metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
     errors = [f"Element ID: {element.Id.IntegerValue}"]
    
@@ -283,23 +247,18 @@ def calculate_element_metrics(element, doc):
                 metrics['length'] = location.Curve.Length
         elif isinstance(element, (Floor, Ceiling, RoofBase)):
             pass  # Already handled by general parameters
-        elif isinstance(element, FamilyInstance):
-            if category_id == int(BuiltInCategory.OST_StructuralFoundation):
-                pile_depth_param = element.get_Parameter(BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
-                if pile_depth_param and pile_depth_param.HasValue:
-                    metrics['length'] = pile_depth_param.AsDouble()
-                else:
-                    # If depth parameter is not available, try to calculate from location
-                    location = element.Location
-                    if isinstance(location, LocationPoint):
-                        base_level = element.get_Parameter(BuiltInParameter.PILE_BOTTOM_LEVEL).AsDouble()
-                        top_level = element.get_Parameter(BuiltInParameter.PILE_TOP_LEVEL).AsDouble()
-                        metrics['length'] = top_level - base_level
-                errors.append(f"Pile depth: {metrics['length']}")
+        elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
+            pile_depth_param = element.get_Parameter(BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+            if pile_depth_param and pile_depth_param.HasValue:
+                metrics['length'] = pile_depth_param.AsDouble()
             else:
-                bbox = element.get_BoundingBox(None)
-                if bbox:
-                    metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
+                # If depth parameter is not available, try to calculate from location
+                location = element.Location
+                if isinstance(location, LocationPoint):
+                    base_level = element.get_Parameter(BuiltInParameter.PILE_BOTTOM_LEVEL).AsDouble()
+                    top_level = element.get_Parameter(BuiltInParameter.PILE_TOP_LEVEL).AsDouble()
+                    metrics['length'] = top_level - base_level
+            errors.append(f"Pile depth: {metrics['length']}")
         elif category_id == int(BuiltInCategory.OST_Rooms):
             room_area_param = element.get_Parameter(BuiltInParameter.ROOM_AREA)
             room_volume_param = element.get_Parameter(BuiltInParameter.ROOM_VOLUME)
@@ -315,6 +274,10 @@ def calculate_element_metrics(element, doc):
             location = element.Location
             if isinstance(location, LocationCurve):
                 metrics['length'] = location.Curve.Length
+        else:
+            bbox = element.get_BoundingBox(None)
+            if bbox:
+                metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
 
         # Convert units (assuming input is in internal units)
         metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
@@ -330,46 +293,165 @@ def calculate_element_metrics(element, doc):
 
     return metrics, errors
 
+def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]]:
+    metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
+    errors = [f"Element ID: {element.Id.IntegerValue}"]
+   
+    try:
+        category = element.Category
+        if category:
+            category_name = category.Name
+            errors.append(f"Category: {category_name}")
+            category_id = category.Id.IntegerValue
+        else:
+            errors.append("Category: None")
+            category_id = -1
+
+        # General Parameters
+        metrics['length'] = get_parameter_value(element, BuiltInParameter.INSTANCE_LENGTH_PARAM)
+        metrics['area'] = get_parameter_value(element, BuiltInParameter.HOST_AREA_COMPUTED)
+        metrics['volume'] = get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
+
+        # Specific handling based on category or element type
+        if isinstance(element, Wall):
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
+
+        elif isinstance(element, (Floor, Ceiling, RoofBase)):
+            pass  # Already handled by general parameters
+
+        elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
+            metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+            if metrics['length'] == 0.0:
+                location = element.Location
+                if isinstance(location, LocationPoint):
+                    depth = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+                    metrics['length'] = depth
+            errors.append(f"Pile depth: {metrics['length']}")
+
+        elif category_id == int(BuiltInCategory.OST_Rooms):
+            metrics['area'] = get_parameter_value(element, BuiltInParameter.ROOM_AREA)
+            metrics['volume'] = get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
+
+        elif category_id == int(BuiltInCategory.OST_Stairs):
+            metrics['length'] = get_parameter_value(element, BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
+
+        elif category_id == int(BuiltInCategory.OST_Railings):
+            location = element.Location
+            if isinstance(location, LocationCurve):
+                metrics['length'] = location.Curve.Length
+
+        else:
+            bbox = element.get_BoundingBox(None)
+            if bbox:
+                metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
+
+        # Unit Conversion (from Revit internal units to desired units)
+        try:
+            metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], 
+                               ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
+            metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], 
+                              ForgeTypeId.FromString("autodesk.spec.aec:squareMeters-1.0.1"))
+            metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], 
+                               ForgeTypeId.FromString("autodesk.spec.aec:cubicMeters-1.0.1"))
+        except Exception as e:
+            errors.append(f"Unit conversion error: {str(e)}")
+
+        for metric, value in metrics.items():
+            errors.append(f"{metric.capitalize()}: {value:.2f}")
+
+    except Exception as e:
+        errors.append(f"Error calculating metrics: {str(e)}")
+        errors.append(traceback.format_exc())
+
+    return metrics, errors
+
+def get_type_metrics(doc):
+    metrics = defaultdict(lambda: {
+        'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 
+        'additional_info': '', 'category': '', 
+        'parameters': {},
+        'errors': []
+    })
+    global_errors = []
+    processed_elements = 0
+    
+    total_elements = FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount()
+    
+    def element_processor():
+        nonlocal processed_elements
+        nonlocal global_errors
+        for element in FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements():
+            element_errors = []
+            try:
+                category_name, family_name, type_name, type_id, additional_info = get_category_family_type_names(element, doc)
+                key = (family_name, type_name)
+                
+                metrics[key]['count'] += 1
+                metrics[key]['type_id'] = type_id
+                metrics[key]['additional_info'] = additional_info
+                metrics[key]['category'] = category_name
+                
+                element_metrics, calc_errors = calculate_element_metrics(element, doc)
+                element_errors.extend(calc_errors)
+                
+                for metric, value in element_metrics.items():
+                    if value is not None:
+                        metrics[key][metric] += value
+                
+                # Add parameter information
+                element_parameters = get_element_parameters(element)
+                for param, value in element_parameters.items():
+                    if param not in metrics[key]['parameters']:
+                        metrics[key]['parameters'][param] = set()
+                    metrics[key]['parameters'][param].add(value)
+                
+                if element_errors:
+                    metrics[key]['errors'].extend(element_errors)
+                
+            except Exception as e:
+                error_msg = f"Error processing element {element.Id} from document '{doc.Title}': {str(e)}\n{traceback.format_exc()}"
+                element_errors.append(error_msg)
+                global_errors.append(error_msg)
+            
+            finally:
+                processed_elements += 1
+                yield processed_elements, total_elements, element_errors
+    
+    return metrics, global_errors, element_processor()
+
+def process_model(doc, model_name):
+    metrics, global_errors, processor = get_type_metrics(doc)
+    total_elements = next(processor)[1]  # Get total elements from first yield
+    
+    with tqdm(total=total_elements, desc=f"Processing {model_name} model") as pbar:
+        for processed, total, element_errors in processor:
+            pbar.update(1)
+    
+    metrics = set_to_list(metrics)
+    return metrics, global_errors
+
 def compare_models(current_doc, old_doc_path):
     app = current_doc.Application
     all_errors = []
 
     print("Processing current model...")
-    current_metrics, current_errors, current_processor = get_type_metrics(current_doc)
+    current_metrics, current_errors = process_model(current_doc, "current")
     all_errors.extend(current_errors)
 
-    print("Processing old model...")
+    print("\nProcessing old model...")
+    old_doc = None
     try:
         old_doc = app.OpenDocumentFile(old_doc_path)
-        old_metrics, old_errors, old_processor = get_type_metrics(old_doc)
+        old_metrics, old_errors = process_model(old_doc, "old")
         all_errors.extend(old_errors)
-
-        # Process both models until completion
-        current_done = False
-        old_done = False
-        while not (current_done and old_done):
-            if not current_done:
-                try:
-                    current_processed, current_total = next(current_processor)
-                    if current_processed % 400 == 0 or current_processed == current_total:
-                        print(f"Current model progress: {current_processed}/{current_total} ({current_processed/current_total*100:.2f}%)")
-                except StopIteration:
-                    current_done = True
-                    print("Current model processing complete.")
-
-            if not old_done:
-                try:
-                    old_processed, old_total = next(old_processor)
-                    if old_processed % 400 == 0 or old_processed == old_total:
-                        print(f"Old model progress: {old_processed}/{old_total} ({old_processed/old_total*100:.2f}%)")
-                except StopIteration:
-                    old_done = True
-                    print("Old model processing complete.")
-
-        old_doc.Close(False)
     except Exception as e:
         all_errors.append(f"Error opening or processing old document: {str(e)}")
         return [], all_errors
+    finally:
+        if old_doc:
+            old_doc.Close(False)
 
     if not current_metrics or not old_metrics:
         all_errors.append("Error: Failed to process one or both models.")
@@ -395,32 +477,32 @@ def compare_models(current_doc, old_doc_path):
             'Current Count': current['count'],
             'Count Diff': current['count'] - old['count'],
             'Count Diff %': (
-                100 if old['count'] == 0 and current['count'] > 0 else
-                -100 if old['count'] > 0 and current['count'] == 0 else
+                1 if old['count'] == 0 and current['count'] > 0 else
+                -1 if old['count'] > 0 and current['count'] == 0 else
                 ((current['count'] - old['count']) / old['count'] * 100) if old['count'] != 0 else 0
             ),
             'Old Length': old['length'],
             'Current Length': current['length'],
             'Length Diff': current['length'] - old['length'],
             'Length Diff %': (
-                100 if old['length'] == 0 and current['length'] > 0 else
-                -100 if old['length'] > 0 and current['length'] == 0 else
+                1 if old['length'] == 0 and current['length'] > 0 else
+                -1 if old['length'] > 0 and current['length'] == 0 else
                 ((current['length'] - old['length']) / old['length'] * 100) if old['length'] != 0 else 0
             ),
             'Old Area': old['area'],
             'Current Area': current['area'],
             'Area Diff': current['area'] - old['area'],
             'Area Diff %': (
-                100 if old['area'] == 0 and current['area'] > 0 else
-                -100 if old['area'] > 0 and current['area'] == 0 else
+                1 if old['area'] == 0 and current['area'] > 0 else
+                -1 if old['area'] > 0 and current['area'] == 0 else
                 ((current['area'] - old['area']) / old['area'] * 100) if old['area'] != 0 else 0
             ),
             'Old Volume': old['volume'],
             'Current Volume': current['volume'],
             'Volume Diff': current['volume'] - old['volume'],
             'Volume Diff %': (
-                100 if old['volume'] == 0 and current['volume'] > 0 else
-                -100 if old['volume'] > 0 and current['volume'] == 0 else
+                1 if old['volume'] == 0 and current['volume'] > 0 else
+                -1 if old['volume'] > 0 and current['volume'] == 0 else
                 ((current['volume'] - old['volume']) / old['volume'] * 100) if old['volume'] != 0 else 0
             )
         })
@@ -437,6 +519,9 @@ def create_excel_report(comparison_data, output_path):
     Returns:
         None
     '''
+    # Sort the comparison_data before creating the Excel file
+    sorted_data = sorted(comparison_data, key=lambda x: (x['Category'], x['Family'], x['Type']))
+    
     wb = openpyxl.Workbook()
     ws_details = wb.active
     ws_details.title = "Type Comparison Details"
@@ -456,7 +541,7 @@ def create_excel_report(comparison_data, output_path):
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='center')
     
-    for row, data in enumerate(comparison_data, start=2):
+    for row, data in enumerate(sorted_data, start=2):
         ws_details.cell(row=row, column=1, value=data['Category'])
         ws_details.cell(row=row, column=2, value=data['Family'])
         ws_details.cell(row=row, column=3, value=data['Type'])
@@ -513,14 +598,6 @@ def create_excel_report(comparison_data, output_path):
         ws_details.column_dimensions[column_letter].width = adjusted_width
 
     ws_details.auto_filter.ref = ws_details.dimensions
-    sort_state = SortState(ref=ws_details.dimensions)
-    
-    # Add sort conditions (Category is column C, Family is column A, Type is column B)
-    sort_state.addSort(1, descending=False)  # Category
-    sort_state.addSort(2, descending=False)  # Family
-    sort_state.addSort(3, descending=False)  # Type
-    
-    ws_details.auto_filter.sort_state = sort_state
 
     wb.save(output_path)
 
@@ -634,8 +711,9 @@ def get_folder_path(prompt):
     Args:
         prompt (str): The prompt message.
     Returns:
-        str: The folder path selected by the user.
+        str: The folder path selected by the user, or None if unsuccessful.
     '''
+    # Try using Windows Forms
     try:
         from System.Windows.Forms import FolderBrowserDialog, DialogResult
         folder_dialog = FolderBrowserDialog()
@@ -643,7 +721,36 @@ def get_folder_path(prompt):
         if folder_dialog.ShowDialog() == DialogResult.OK:
             return folder_dialog.SelectedPath
     except:
-        return TaskDialog.Show("Folder Path Input", prompt)
+        pass
+
+    # Try using standard Python input
+    try:
+        folder_path = input(f"{prompt} (enter full path): ")
+        if os.path.isdir(folder_path):
+            return folder_path
+        else:
+            print("Invalid directory. Please try again.")
+    except:
+        pass
+
+    # If all else fails, use TaskDialog for input
+    try:
+        path = TaskDialog.Show("Folder Path Input",
+                               prompt,
+                               TaskDialogCommonButtons.Ok | TaskDialogCommonButtons.Cancel,
+                               TaskDialogResult.Ok)
+        if path == TaskDialogResult.Ok:
+            folder_path = TaskDialog.Show("Folder Path Input", "Enter the full folder path:")
+            if os.path.isdir(folder_path):
+                return folder_path
+            else:
+                TaskDialog.Show("Error", "Invalid directory. Please try again.")
+    except:
+        pass
+
+    # If we get here, all methods failed
+    TaskDialog.Show("Error", "Unable to get folder path input.")
+    return None
 
 def validate_folder_path(folder_path):
     '''
@@ -661,12 +768,11 @@ def validate_folder_path(folder_path):
         return False
     return True
 
-def safe_sort_key(item):
-    if item is None:
-        return ("", "")  # Return empty tuple for None values
-    if isinstance(item, tuple):
-        return tuple(safe_sort_key(i) for i in item)
-    return (str(item), "")
+def set_to_list(metrics):
+    for key in metrics:
+        if 'parameters' in metrics[key]:
+            metrics[key]['parameters'] = {k: list(v) for k, v in metrics[key]['parameters'].items()}
+    return metrics
 
 def main():
     clear_all_lru_caches()
