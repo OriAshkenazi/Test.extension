@@ -815,6 +815,9 @@ def main():
         if not validate_folder_path(output_folder_path):
             return
 
+        # Debugging: Print the selected folder path
+        print(f"Selected output folder path: {output_folder_path}")
+
         # Generate a timestamp for the file name
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         
@@ -827,6 +830,11 @@ def main():
         output_path = os.path.join(output_folder_path, output_file_name)
         errors_path = os.path.join(output_folder_path, errors_file_name)
         all_types_path = os.path.join(output_folder_path, all_types_file_name)
+
+        # Debugging: Print the full file paths
+        print(f"Output file path: {output_path}")
+        print(f"Errors file path: {errors_path}")
+        print(f"All types file path: {all_types_path}")
 
         print("Starting model comparison...")
         comparison_data, comparison_errors, all_types = compare_models(doc, old_doc_path)
