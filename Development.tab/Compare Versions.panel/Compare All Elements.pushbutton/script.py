@@ -272,13 +272,39 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
             pass  # Already handled by general parameters
 
         elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
-            # Try to get length, area, and volume from parameters
-            metrics['length'] = get_parameter_value(element, 'Depth')
-            metrics['area'] = get_parameter_value(element, 'Area')
-            metrics['volume'] = get_parameter_value(element, 'Volume')
-
+            # Get length (depth) of the foundation
+            metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+            
+            # Try to get diameter for circular piles
+            diameter = get_parameter_value(element, 'Diameter')
+            
+            # If diameter is not found, try to get width for square piles
+            if diameter == 0:
+                width = get_parameter_value(element, 'Width')
+                depth = get_parameter_value(element, 'Depth')
+            else:
+                width = depth = diameter
+            
+            # Calculate cross-sectional area
+            if diameter > 0:
+                # Circular pile
+                metrics['area'] = math.pi * (diameter/2)**2
+            elif width > 0 and depth > 0:
+                # Rectangular or square pile
+                metrics['area'] = width * depth
+            else:
+                metrics['area'] = 0
+                errors.append("Could not determine pile cross-sectional area")
+            
+            # Calculate volume
+            if metrics['length'] > 0 and metrics['area'] > 0:
+                metrics['volume'] = metrics['area'] * metrics['length']
+            else:
+                # If we couldn't calculate it, try to get it directly from the element
+                metrics['volume'] = get_parameter_value(element, 'Volume')
+            
             # If length is still 0, try to calculate it from geometry
-            if metrics['length'] == 0.0:
+            if metrics['length'] == 0:
                 try:
                     geo_elem = element.get_Geometry(Options())
                     if geo_elem:
@@ -286,19 +312,14 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
                         metrics['length'] = bbox.Max.Z - bbox.Min.Z
                 except Exception as e:
                     errors.append(f"Error calculating foundation length: {str(e)}")
-
-            # If area or volume is 0, try to calculate from other parameters
-            if metrics['area'] == 0.0:
-                width = get_parameter_value(element, 'Width')
-                depth = get_parameter_value(element, 'Depth')
-                if width and depth:
-                    metrics['area'] = width * depth
-
-            if metrics['volume'] == 0.0 and metrics['area'] > 0 and metrics['length'] > 0:
+            
+            # If volume is still 0 and we have length and area, calculate it
+            if metrics['volume'] == 0 and metrics['area'] > 0 and metrics['length'] > 0:
                 metrics['volume'] = metrics['area'] * metrics['length']
 
-            errors.append(f"Foundation metrics - Length: {metrics['length']}, Area: {metrics['area']}, Volume: {metrics['volume']}")
-        
+            errors.append(f"Foundation metrics - Length (depth): {metrics['length']:.2f}, "
+                        f"Cross-sectional Area: {metrics['area']:.2f}, Volume: {metrics['volume']:.2f}")
+
         elif category_id == int(BuiltInCategory.OST_Rooms):
             metrics['area'] = get_parameter_value(element, BuiltInParameter.ROOM_AREA)
             metrics['volume'] = get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
@@ -482,7 +503,7 @@ def compare_models(current_doc, old_doc_path):
             'Count Diff %': (
                 1 if old['count'] == 0 and current['count'] > 0 else
                 -1 if old['count'] > 0 and current['count'] == 0 else
-                ((current['count'] - old['count']) / old['count'] * 100) if old['count'] != 0 else 0
+                ((current['count'] - old['count']) / old['count']) if old['count'] != 0 else 0
             ),
             'Old Length': old['length'],
             'Current Length': current['length'],
@@ -490,7 +511,7 @@ def compare_models(current_doc, old_doc_path):
             'Length Diff %': (
                 1 if old['length'] == 0 and current['length'] > 0 else
                 -1 if old['length'] > 0 and current['length'] == 0 else
-                ((current['length'] - old['length']) / old['length'] * 100) if old['length'] != 0 else 0
+                ((current['length'] - old['length']) / old['length']) if old['length'] != 0 else 0
             ),
             'Old Area': old['area'],
             'Current Area': current['area'],
@@ -498,7 +519,7 @@ def compare_models(current_doc, old_doc_path):
             'Area Diff %': (
                 1 if old['area'] == 0 and current['area'] > 0 else
                 -1 if old['area'] > 0 and current['area'] == 0 else
-                ((current['area'] - old['area']) / old['area'] * 100) if old['area'] != 0 else 0
+                ((current['area'] - old['area']) / old['area']) if old['area'] != 0 else 0
             ),
             'Old Volume': old['volume'],
             'Current Volume': current['volume'],
@@ -506,7 +527,7 @@ def compare_models(current_doc, old_doc_path):
             'Volume Diff %': (
                 1 if old['volume'] == 0 and current['volume'] > 0 else
                 -1 if old['volume'] > 0 and current['volume'] == 0 else
-                ((current['volume'] - old['volume']) / old['volume'] * 100) if old['volume'] != 0 else 0
+                ((current['volume'] - old['volume']) / old['volume']) if old['volume'] != 0 else 0
             )
         })
 
