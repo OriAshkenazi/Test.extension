@@ -205,13 +205,31 @@ def get_element_parameters(element):
 
     return parameters
 
-def get_parameter_value(element, param_id: BuiltInParameter) -> float:
+def get_parameter_value(element, param_id):
     '''
     Helper function to get a parameter value safely.
+    Args:
+        element: The Revit element
+        param_id: Either a BuiltInParameter or a string representing the parameter name
+    Returns:
+        float: The parameter value as a float, or 0.0 if not found or not a number
     '''
-    param = element.get_Parameter(param_id)
+    param = None
+    if isinstance(param_id, BuiltInParameter):
+        param = element.get_Parameter(param_id)
+    elif isinstance(param_id, str):
+        param = element.LookupParameter(param_id)
+    
     if param and param.HasValue:
-        return param.AsDouble()
+        if param.StorageType == StorageType.Double:
+            return param.AsDouble()
+        elif param.StorageType == StorageType.Integer:
+            return float(param.AsInteger())
+        elif param.StorageType == StorageType.String:
+            try:
+                return float(param.AsString())
+            except ValueError:
+                return 0.0
     return 0.0
 
 def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]]:
