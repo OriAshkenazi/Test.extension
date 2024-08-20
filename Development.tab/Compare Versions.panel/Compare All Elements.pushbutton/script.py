@@ -45,7 +45,7 @@ def clear_all_lru_caches():
         func.cache_clear()
 
 def get_category_family_type_names(element: Element, doc: Document) -> tuple:
-    """
+    '''
     Get the family and type names of an element, along with Type ID and additional type info.
     
     Args:
@@ -63,7 +63,7 @@ def get_category_family_type_names(element: Element, doc: Document) -> tuple:
     Raises:
         ValueError: If input parameters are not of the expected types.
         AttributeError: If expected attributes or methods are missing.
-    """
+    '''
     if not isinstance(element, Element) or not isinstance(doc, Document):
         raise ValueError("Invalid input types. Expected Element and Document.")
 
@@ -214,86 +214,18 @@ def get_parameter_value(element, param_id: BuiltInParameter) -> float:
         return param.AsDouble()
     return 0.0
 
-def calculate_element_metrics_old(element, doc):
-    metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
-    errors = [f"Element ID: {element.Id.IntegerValue}"]
-   
-    try:
-        category = element.Category
-        if category:
-            category_name = category.Name
-            errors.append(f"Category: {category_name}")
-            category_id = category.Id.IntegerValue
-        else:
-            errors.append("Category: None")
-            category_id = -1
-
-        # Try to get general parameters first
-        length_param = element.get_Parameter(BuiltInParameter.INSTANCE_LENGTH_PARAM)
-        area_param = element.get_Parameter(BuiltInParameter.HOST_AREA_COMPUTED)
-        volume_param = element.get_Parameter(BuiltInParameter.HOST_VOLUME_COMPUTED)
-        
-        if length_param and length_param.HasValue:
-            metrics['length'] = length_param.AsDouble()
-        if area_param and area_param.HasValue:
-            metrics['area'] = area_param.AsDouble()
-        if volume_param and volume_param.HasValue:
-            metrics['volume'] = volume_param.AsDouble()
-
-        # Specific element handling
-        if isinstance(element, Wall):
-            location = element.Location
-            if isinstance(location, LocationCurve):
-                metrics['length'] = location.Curve.Length
-        elif isinstance(element, (Floor, Ceiling, RoofBase)):
-            pass  # Already handled by general parameters
-        elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
-            pile_depth_param = element.get_Parameter(BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
-            if pile_depth_param and pile_depth_param.HasValue:
-                metrics['length'] = pile_depth_param.AsDouble()
-            else:
-                # If depth parameter is not available, try to calculate from location
-                location = element.Location
-                if isinstance(location, LocationPoint):
-                    base_level = element.get_Parameter(BuiltInParameter.PILE_BOTTOM_LEVEL).AsDouble()
-                    top_level = element.get_Parameter(BuiltInParameter.PILE_TOP_LEVEL).AsDouble()
-                    metrics['length'] = top_level - base_level
-            errors.append(f"Pile depth: {metrics['length']}")
-        elif category_id == int(BuiltInCategory.OST_Rooms):
-            room_area_param = element.get_Parameter(BuiltInParameter.ROOM_AREA)
-            room_volume_param = element.get_Parameter(BuiltInParameter.ROOM_VOLUME)
-            if room_area_param and room_area_param.HasValue:
-                metrics['area'] = room_area_param.AsDouble()
-            if room_volume_param and room_volume_param.HasValue:
-                metrics['volume'] = room_volume_param.AsDouble()
-        elif category_id == int(BuiltInCategory.OST_Stairs):
-            stair_length_param = element.get_Parameter(BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
-            if stair_length_param and stair_length_param.HasValue:
-                metrics['length'] = stair_length_param.AsDouble()
-        elif category_id == int(BuiltInCategory.OST_Railings):
-            location = element.Location
-            if isinstance(location, LocationCurve):
-                metrics['length'] = location.Curve.Length
-        else:
-            bbox = element.get_BoundingBox(None)
-            if bbox:
-                metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
-
-        # Convert units (assuming input is in internal units)
-        metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
-        metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], ForgeTypeId.FromString("autodesk.spec.aec:squareMeters-1.0.1"))
-        metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], ForgeTypeId.FromString("autodesk.spec.aec:cubicMeters-1.0.1"))
-
-        for metric, value in metrics.items():
-            errors.append(f"{metric.capitalize()}: {value:.2f}")
-
-    except Exception as e:
-        errors.append(f"Error calculating metrics: {str(e)}")
-        errors.append(traceback.format_exc())
-
-    return metrics, errors
-
 def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]]:
+    '''
+    Calculate the metrics for an element.
+
+    Args:
+        element (Element): The element to calculate metrics for.
+        doc (Document): The Revit document.
+    Returns:
+        Tuple[Dict[str, float], List[str]]: A tuple containing:
+            - A dictionary of calculated metrics.
+            - A list of errors encountered during calculation.
+    '''
     metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
     errors = [f"Element ID: {element.Id.IntegerValue}"]
    
@@ -368,6 +300,17 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
     return metrics, errors
 
 def get_type_metrics(doc):
+    '''
+    Get the metrics for all types in the document.
+
+    Args:
+        doc (Document): The Revit document.
+    Returns:
+        Tuple[Dict[Tuple[str, str], Dict[str, float]], List[str], Generator]: A tuple containing:
+            - A dictionary of metrics for each type.
+            - A list of global errors encountered during processing.
+            - A generator to process elements and yield progress.
+    '''
     metrics = defaultdict(lambda: {
         'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 
         'additional_info': '', 'category': '', 
@@ -422,6 +365,17 @@ def get_type_metrics(doc):
     return metrics, global_errors, element_processor()
 
 def process_model(doc, model_name):
+    '''
+    Process the model to get the metrics and errors.
+
+    Args:
+        doc (Document): The Revit document to process.
+        model_name (str): The name of the model.
+    Returns:
+        Tuple[Dict[Tuple[str, str], Dict[str, float]], List[str]]: A tuple containing:
+            - A dictionary of metrics for each type.
+            - A list of global errors encountered during processing.
+    '''
     metrics, global_errors, processor = get_type_metrics(doc)
     total_elements = next(processor)[1]  # Get total elements from first yield
     
@@ -433,6 +387,18 @@ def process_model(doc, model_name):
     return metrics, global_errors
 
 def compare_models(current_doc, old_doc_path):
+    '''
+    Compare two Revit models and generate a report.
+
+    Args:
+        current_doc (Document): The current Revit document.
+        old_doc_path (str): The path to the old Revit document.
+    Returns:
+        Tuple[List[Dict[str, any]], List[str], set]: A tuple containing:
+            - A list of dictionaries containing the comparison data.
+            - A list of errors encountered during processing.
+            - A set of all types processed.
+    '''
     app = current_doc.Application
     all_errors = []
 
