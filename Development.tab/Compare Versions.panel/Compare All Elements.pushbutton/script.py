@@ -255,7 +255,7 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
 
         elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
             # Try to get length, area, and volume from parameters
-            metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+            metrics['length'] = get_parameter_value(element, 'Depth')
             metrics['area'] = get_parameter_value(element, 'Area')
             metrics['volume'] = get_parameter_value(element, 'Volume')
 
