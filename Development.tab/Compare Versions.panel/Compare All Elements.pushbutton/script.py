@@ -254,14 +254,33 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
             pass  # Already handled by general parameters
 
         elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
+            # Try to get length, area, and volume from parameters
             metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
-            if metrics['length'] == 0.0:
-                location = element.Location
-                if isinstance(location, LocationPoint):
-                    depth = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
-                    metrics['length'] = depth
-            errors.append(f"Pile depth: {metrics['length']}")
+            metrics['area'] = get_parameter_value(element, 'Area')
+            metrics['volume'] = get_parameter_value(element, 'Volume')
 
+            # If length is still 0, try to calculate it from geometry
+            if metrics['length'] == 0.0:
+                try:
+                    geo_elem = element.get_Geometry(Options())
+                    if geo_elem:
+                        bbox = geo_elem.GetBoundingBox()
+                        metrics['length'] = bbox.Max.Z - bbox.Min.Z
+                except Exception as e:
+                    errors.append(f"Error calculating foundation length: {str(e)}")
+
+            # If area or volume is 0, try to calculate from other parameters
+            if metrics['area'] == 0.0:
+                width = get_parameter_value(element, 'Width')
+                depth = get_parameter_value(element, 'Depth')
+                if width and depth:
+                    metrics['area'] = width * depth
+
+            if metrics['volume'] == 0.0 and metrics['area'] > 0 and metrics['length'] > 0:
+                metrics['volume'] = metrics['area'] * metrics['length']
+
+            errors.append(f"Foundation metrics - Length: {metrics['length']}, Area: {metrics['area']}, Volume: {metrics['volume']}")
+        
         elif category_id == int(BuiltInCategory.OST_Rooms):
             metrics['area'] = get_parameter_value(element, BuiltInParameter.ROOM_AREA)
             metrics['volume'] = get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
