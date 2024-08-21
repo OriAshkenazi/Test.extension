@@ -6,8 +6,9 @@ import sys
 import time
 import traceback
 import io
+import math
 from collections import defaultdict
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Callable
 from functools import wraps, lru_cache
 
 clr.AddReference('RevitAPI')
@@ -15,6 +16,7 @@ clr.AddReference('RevitAPIUI')
 # Revit 2019
 # from Autodesk.Revit.DB import FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId, Wall, Floor, Ceiling, FamilyInstance, Area, LocationCurve, RoofBase, UnitUtils, DisplayUnitType
 # Revit 2023
+from Autodesk.Revit import DB
 from Autodesk.Revit.DB import Element, Document, FamilyInstance, FilteredElementCollector, BuiltInCategory, BuiltInParameter, ElementId, Wall, Floor, Ceiling, FamilyInstance, Area, LocationCurve, RoofBase, UnitUtils, ForgeTypeId
 from Autodesk.Revit.UI import *
 from System.Windows.Forms import FolderBrowserDialog, DialogResult
@@ -32,6 +34,153 @@ doc = uidoc.Document
 
 # List to keep track of all LRU cached functions
 lru_cached_functions = []
+
+
+class ElementMetricsCalculator:
+    def __init__(self):
+        self.metrics = {
+            'length': 0.0,
+            'area': 0.0,
+            'volume': 0.0
+        }
+        self.errors = []
+        self.category_handlers = {
+            BuiltInCategory.OST_StructuralFoundation: self.handle_structural_foundation,
+            BuiltInCategory.OST_Walls: self.handle_wall,
+            BuiltInCategory.OST_Floors: self.handle_floor,
+            BuiltInCategory.OST_Ceilings: self.handle_ceiling,
+            BuiltInCategory.OST_Roofs: self.handle_roof,
+            BuiltInCategory.OST_Rooms: self.handle_room,
+            BuiltInCategory.OST_Stairs: self.handle_stairs,
+            BuiltInCategory.OST_Railings: self.handle_railing
+        }
+
+    def calculate_metrics(self, element: Element, doc: Document) -> Tuple[Dict[str, float], List[str]]:
+        self.metrics = {key: 0.0 for key in self.metrics}
+        self.errors = [f"Element ID: {element.Id.IntegerValue}"]
+
+        try:
+            category = element.Category
+            if category:
+                self.errors.append(f"Category: {category.Name}")
+                handler = self.category_handlers.get(category.Id.IntegerValue, self.handle_default)
+            else:
+                self.errors.append("Category: None")
+                handler = self.handle_default
+
+            handler(element, doc)
+
+            self.convert_units()
+            self.log_metrics()
+
+        except Exception as e:
+            self.errors.append(f"Error calculating metrics: {str(e)}")
+            import traceback
+            self.errors.append(traceback.format_exc())
+
+        return self.metrics, self.errors
+
+    def handle_structural_foundation(self, element: Element, doc: Document):
+        self.metrics['length'] = self.get_parameter_value(element, 'Foundation Depth')
+        diameter = self.get_parameter_value(element, 'Diameter')
+        
+        if diameter == 0:
+            width = self.get_parameter_value(element, 'Width')
+            depth = self.get_parameter_value(element, 'Depth')
+        else:
+            width = depth = diameter
+        
+        if diameter > 0:
+            self.metrics['area'] = math.pi * (diameter/2)**2
+        elif width > 0 and depth > 0:
+            self.metrics['area'] = width * depth
+        
+        if self.metrics['length'] > 0 and self.metrics['area'] > 0:
+            self.metrics['volume'] = self.metrics['area'] * self.metrics['length']
+        else:
+            self.metrics['volume'] = self.get_parameter_value(element, 'Volume')
+        
+        if self.metrics['length'] == 0:
+            try:
+                geo_elem = element.get_Geometry(Options())
+                if geo_elem:
+                    bbox = geo_elem.GetBoundingBox()
+                    self.metrics['length'] = bbox.Max.Z - bbox.Min.Z
+            except Exception as e:
+                self.errors.append(f"Error calculating foundation length: {str(e)}")
+
+    def handle_wall(self, element: Element, doc: Document):
+        location = element.Location
+        if isinstance(location, LocationCurve):
+            self.metrics['length'] = location.Curve.Length
+        self.metrics['area'] = self.get_parameter_value(element, BuiltInParameter.HOST_AREA_COMPUTED)
+        self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
+
+    def handle_floor(self, element: Element, doc: Document):
+        self.handle_default(element, doc)
+
+    def handle_ceiling(self, element: Element, doc: Document):
+        self.handle_default(element, doc)
+
+    def handle_roof(self, element: Element, doc: Document):
+        self.handle_default(element, doc)
+
+    def handle_room(self, element: Element, doc: Document):
+        self.metrics['area'] = self.get_parameter_value(element, BuiltInParameter.ROOM_AREA)
+        self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
+
+    def handle_stairs(self, element: Element, doc: Document):
+        self.metrics['length'] = self.get_parameter_value(element, BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
+
+    def handle_railing(self, element: Element, doc: Document):
+        location = element.Location
+        if isinstance(location, LocationCurve):
+            self.metrics['length'] = location.Curve.Length
+
+    def handle_default(self, element: Element, doc: Document):
+        self.metrics['length'] = self.get_parameter_value(element, BuiltInParameter.INSTANCE_LENGTH_PARAM)
+        self.metrics['area'] = self.get_parameter_value(element, BuiltInParameter.HOST_AREA_COMPUTED)
+        self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
+        
+        if all(v == 0 for v in self.metrics.values()):
+            bbox = element.get_BoundingBox(None)
+            if bbox:
+                self.metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
+
+    def get_parameter_value(self, element: Element, param_id):
+        param = None
+        if isinstance(param_id, BuiltInParameter):
+            param = element.get_Parameter(param_id)
+        elif isinstance(param_id, str):
+            param = element.LookupParameter(param_id)
+        
+        if param and param.HasValue:
+            if param.StorageType == StorageType.Double:
+                return param.AsDouble()
+            elif param.StorageType == StorageType.Integer:
+                return float(param.AsInteger())
+            elif param.StorageType == StorageType.String:
+                try:
+                    return float(param.AsString())
+                except ValueError:
+                    return 0.0
+        return 0.0
+
+    def convert_units(self):
+        try:
+            self.metrics['length'] = UnitUtils.ConvertFromInternalUnits(self.metrics['length'], 
+                                    ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
+            self.metrics['area'] = UnitUtils.ConvertFromInternalUnits(self.metrics['area'], 
+                                    ForgeTypeId.FromString("autodesk.spec.aec:squareMeters-1.0.1"))
+            self.metrics['volume'] = UnitUtils.ConvertFromInternalUnits(self.metrics['volume'], 
+                                    ForgeTypeId.FromString("autodesk.spec.aec:cubicMeters-1.0.1"))
+        except Exception as e:
+            self.errors.append(f"Unit conversion error: {str(e)}")
+
+    def log_metrics(self):
+        for metric, value in self.metrics.items():
+            self.errors.append(f"{metric.capitalize()}: {value:.2f}")
+
 
 def tracked_lru_cache(*args, **kwargs):
     def decorator(func):
@@ -270,10 +419,14 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
 
         elif isinstance(element, (Floor, Ceiling, RoofBase)):
             pass  # Already handled by general parameters
+        
+        errors.append(f"Initial metrics - Length: {metrics['length']:.2f}, Area: {metrics['area']:.2f}, Volume: {metrics['volume']:.2f}")
 
-        elif category_id == int(BuiltInCategory.OST_StructuralFoundation):
+        if category_name == "Structural Foundations":
+            errors.append("Processing Structural Foundation")
             # Get length (depth) of the foundation
             metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
+            errors.append(f"Foundation depth: {metrics['length']:.2f}")
             
             # Try to get diameter for circular piles
             diameter = get_parameter_value(element, 'Diameter')
@@ -357,7 +510,7 @@ def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]
 
     return metrics, errors
 
-def get_type_metrics(doc):
+def get_type_metrics_old(doc):
     '''
     Get the metrics for all types in the document.
 
@@ -370,10 +523,9 @@ def get_type_metrics(doc):
             - A generator to process elements and yield progress.
     '''
     metrics = defaultdict(lambda: {
-        'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0, 'type_id': '', 
-        'additional_info': '', 'category': '', 
-        'parameters': {},
-        'errors': []
+        'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0,
+        'type_id': '', 'additional_info': '', 'category': '', 
+        'parameters': {}, 'errors': []
     })
     global_errors = []
     processed_elements = 0
@@ -422,6 +574,52 @@ def get_type_metrics(doc):
     
     return metrics, global_errors, element_processor()
 
+def get_type_metrics(doc: Document):
+    calculator = ElementMetricsCalculator()
+    metrics = defaultdict(lambda: {
+        'count': 0, 'area': 0.0, 'volume': 0.0, 'length': 0.0,
+        'type_id': '', 'additional_info': '', 'category': '', 
+        'parameters': {}, 'errors': []
+    })
+    global_errors = []
+    
+    total_elements = FilteredElementCollector(doc).WhereElementIsNotElementType().GetElementCount()
+    
+    def element_processor():
+        processed_elements = 0
+        for element in FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements():
+            try:
+                category_name, family_name, type_name, type_id, additional_info = get_category_family_type_names(element, doc)
+                key = (family_name, type_name)
+                
+                metrics[key]['count'] += 1
+                metrics[key]['type_id'] = type_id
+                metrics[key]['additional_info'] = additional_info
+                metrics[key]['category'] = category_name
+                
+                element_metrics, calc_errors = calculator.calculate_metrics(element, doc)
+                metrics[key]['errors'].extend(calc_errors)
+                
+                for metric, value in element_metrics.items():
+                    if value is not None:
+                        metrics[key][metric] += value
+                
+                element_parameters = get_element_parameters(element)
+                for param, value in element_parameters.items():
+                    if param not in metrics[key]['parameters']:
+                        metrics[key]['parameters'][param] = set()
+                    metrics[key]['parameters'][param].add(value)
+                
+            except Exception as e:
+                error_msg = f"Error processing element {element.Id} from document '{doc.Title}': {str(e)}\n{traceback.format_exc()}"
+                global_errors.append(error_msg)
+            
+            finally:
+                processed_elements += 1
+                yield processed_elements, total_elements
+    
+    return metrics, global_errors, element_processor()
+
 def process_model(doc, model_name):
     '''
     Process the model to get the metrics and errors.
@@ -432,17 +630,20 @@ def process_model(doc, model_name):
     Returns:
         Tuple[Dict[Tuple[str, str], Dict[str, float]], List[str]]: A tuple containing:
             - A dictionary of metrics for each type.
-            - A list of global errors encountered during processing.
+            - A list of all errors encountered during processing.
     '''
     metrics, global_errors, processor = get_type_metrics(doc)
     total_elements = next(processor)[1]  # Get total elements from first yield
     
+    all_errors = global_errors.copy()  # Create a copy of global_errors
+    
     with tqdm(total=total_elements, desc=f"Processing {model_name} model") as pbar:
         for processed, total, element_errors in processor:
+            all_errors.extend(element_errors)
             pbar.update(1)
     
     metrics = set_to_list(metrics)
-    return metrics, global_errors
+    return metrics, all_errors
 
 def compare_models(current_doc, old_doc_path):
     '''
@@ -802,8 +1003,14 @@ def main():
     clear_all_lru_caches()
     errors = []
     try:
-        file_name = doc.PathName.split("/")[-1].split(".")[0].split("_")
-        prefix = f"{file_name[0]}_{file_name[1]}"
+        # Corrected file name handling
+        file_name = doc.PathName.split("\\")[-1]  # Split by backslash and get the last element (file name with extension)
+        file_name_base = file_name.split(".")[0]  # Remove the extension
+        file_name_parts = file_name_base.split("_")  # Split by underscore
+        if len(file_name_parts) >= 2:
+            prefix = f"{file_name_parts[0]}_{file_name_parts[1]}"
+        else:
+            prefix = file_name_parts[0]  # Fallback to a simpler prefix
 
         # Get the old model path
         old_doc_path = get_file_path_flexible("Select the old Revit model file", "rvt")
@@ -815,21 +1022,26 @@ def main():
         if not validate_folder_path(output_folder_path):
             return
 
-        # Debugging: Print the selected folder path
+        # Debugging: Print the selected folder path and prefix
         print(f"Selected output folder path: {output_folder_path}")
+        print(f"Prefix: {prefix}")
 
         # Generate a timestamp for the file name
         timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
         
         # Create file names with the timestamp
-        output_file_name = f"{prefix}_Comparison_{timestamp}.xlsx"
-        errors_file_name = f"{prefix}_Comparison_errors_{timestamp}.txt"
-        all_types_file_name = f"{prefix}_All_Types_{timestamp}.txt"
+        output_file_name = f"Comparison.xlsx"
+        errors_file_name = f"Comparison_errors.txt"
+        all_types_file_name = f"All_Types.txt"
         
         # Create the full file paths
-        output_path = os.path.join(output_folder_path, output_file_name)
-        errors_path = os.path.join(output_folder_path, errors_file_name)
-        all_types_path = os.path.join(output_folder_path, all_types_file_name)
+        full_output_dir = os.path.join(output_folder_path, prefix, timestamp)
+        output_path = os.path.join(full_output_dir, output_file_name)
+        errors_path = os.path.join(full_output_dir, errors_file_name)
+        all_types_path = os.path.join(full_output_dir, all_types_file_name)
+
+        # Create directories if they don't exist
+        os.makedirs(full_output_dir, exist_ok=True)
 
         # Debugging: Print the full file paths
         print(f"Output file path: {output_path}")
@@ -867,6 +1079,5 @@ def main():
 
     clear_all_lru_caches()
 
-# Call the main function
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
