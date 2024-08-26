@@ -146,33 +146,6 @@ def create_or_modify_3d_view(doc, power_devices, outlets, view_name="VDC - HVAC 
         if view_template:
             view.ViewTemplateId = view_template.Id
         
-        print("Getting floors and walls from linked documents...")
-        floors = get_elements_from_linked_docs(doc, BuiltInCategory.OST_Floors)
-        walls = get_elements_from_linked_docs(doc, BuiltInCategory.OST_Walls)
-        
-        print(f"Number of power devices: {len(power_devices)}")
-        print(f"Number of outlets: {len(outlets)}")
-        print(f"Number of floors from linked docs: {len(floors)}")
-        print(f"Number of walls from linked docs: {len(walls)}")
-        
-        all_visible_elements = power_devices + outlets + floors + walls
-        
-        print("Isolating visible elements...")
-        elements_to_isolate = List[ElementId]([elem.Id for elem in all_visible_elements])
-        view.IsolateElementsTemporary(elements_to_isolate)
-        
-        print("Setting transparency for floors and walls...")
-        override_settings = OverrideGraphicSettings()
-        override_settings.SetSurfaceTransparency(90)
-        
-        batch_size = 1000
-        total_elements = len(floors) + len(walls)
-        for i in range(0, total_elements, batch_size):
-            batch = (floors + walls)[i:i+batch_size]
-            for element in batch:
-                view.SetElementOverrides(element.Id, override_settings)
-            print(f"Applied overrides to batch {i//batch_size + 1} of {(total_elements-1)//batch_size + 1}")
-        
         t.Commit()
         print(f"Successfully {'created' if is_new_view else 'modified'} 3D view: {view.Name}")
         return view
@@ -203,21 +176,41 @@ def create_or_get_view_template(doc, template_name):
         new_template.DetailLevel = ViewDetailLevel.Fine
         new_template.DisplayStyle = DisplayStyle.Realistic
 
-        # Hide categories except MEP and Architecture
+        # Set visibility for categories
+        visible_categories = [
+            "Analysis Display Style", "Analysis Results", "Bridge Abutments", "Bridge Arches",
+            "Bridge Bearings", "Bridge Cables", "Bridge Decks", "Bridge Foundations",
+            "Bridge Girders", "Bridge Piers", "Bridge Towers", "Cable Tray Runs",
+            "Conduit Runs", "Coordination Model", "Curtain Grids", "Duct Systems",
+            "Electrical Circuits", "Electrical Fixtures", "Electrical Spare/Space Circuits",
+            "Filled region", "HVAC Zones", "Imports in Families", "Masking Region",
+            "Materials", "Mechanical Equipment", "Mechanical Equipment Sets",
+            "Pipe Segments", "Piping Systems", "Project Information", "RVT Links",
+            "Rebar Shape", "Rooms", "Routing Preferences", "Sheets", "Spaces",
+            "Switch System", "Walls"
+        ]
+
         all_categories = doc.Settings.Categories
         for category in all_categories:
             if category.CategoryType == CategoryType.Model:
-                if category.Id.IntegerValue not in [-2001140, -2001060, -2000032, -2000011]:  # MEP Equipment, Electrical Fixtures, Floors, Walls
-                    try:
-                        new_template.SetCategoryHidden(category.Id, True)
-                    except:
-                        print(f"Could not hide category: {category.Name}")
+                should_be_visible = category.Name in visible_categories
+                try:
+                    new_template.SetCategoryHidden(category.Id, not should_be_visible)
+                except:
+                    print(f"Could not set visibility for category: {category.Name}")
 
         # Set transparency for floors and walls
         override_settings = OverrideGraphicSettings()
         override_settings.SetSurfaceTransparency(90)
         new_template.SetCategoryOverrides(ElementId(BuiltInCategory.OST_Floors), override_settings)
         new_template.SetCategoryOverrides(ElementId(BuiltInCategory.OST_Walls), override_settings)
+
+        # Set other properties
+        new_template.Scale = 100
+        new_template.Discipline = 4095  # This might need adjustment based on the Revit API enumeration
+        new_template.get_Parameter(BuiltInParameter.VIEW_PARTS_VISIBILITY).Set(1)
+        new_template.get_Parameter(BuiltInParameter.VIEW_SHOW_HIDDEN_LINES).Set(1)
+        new_template.get_Parameter(BuiltInParameter.VIEW_SHOW_SUNPATH).Set(0)
 
         t.Commit()
         return new_template
@@ -262,57 +255,38 @@ def calculate_distance(source_point, target_point):
     return distance_feet * 0.3048  # Convert feet to meters
 
 def calculate_nearest_distance(source_elements, target_elements):
-    """
-    Calculate the nearest distance between each source element and target elements using caching.
-    
-    Args:
-        source_elements (List[Element]): List of source elements.
-        target_elements (List[Element]): List of target elements.
-    
-    Returns:
-        List[Dict]: List of dictionaries containing source, nearest target, and distance.
-    """
     results = []
     total_comparisons = len(source_elements) * len(target_elements)
     
-    # Pre-calculate all target points
-    target_points = [target.Location.Point for target in target_elements]
-    
     with tqdm(total=total_comparisons, desc="Calculating distances") as pbar:
-        for source in source_elements:
+        for source, source_doc in source_elements:
             source_point = source.Location.Point
             min_distance = float('inf')
             nearest_target = None
+            nearest_target_doc = None
             
-            for i, target_point in enumerate(target_points):
+            for target, target_doc in target_elements:
+                target_point = target.Location.Point
                 distance = calculate_distance(source_point, target_point)
                 
                 if distance < min_distance:
                     min_distance = distance
-                    nearest_target = target_elements[i]
+                    nearest_target = target
+                    nearest_target_doc = target_doc
                 
                 pbar.update(1)
             
             results.append({
                 'source': source,
+                'source_doc': source_doc,
                 'nearest_target': nearest_target,
+                'target_doc': nearest_target_doc,
                 'distance': min_distance
             })
     
     return results
 
 def get_elements_by_category_and_description(category, search_strings, linked_docs):
-    """
-    Fetch elements of a specific category from linked documents that match any of the search strings.
-    
-    Args:
-        category (BuiltInCategory): The category of elements to collect.
-        search_strings (List[str]): List of strings to search for in element parameters.
-        linked_docs (List[Document]): List of linked Revit documents.
-    
-    Returns:
-        List[Element]: List of elements that match the provided category and search strings.
-    """
     elements = []
     for linked_doc in linked_docs:
         collector = FilteredElementCollector(linked_doc).OfCategory(category).WhereElementIsNotElementType()
@@ -323,9 +297,9 @@ def get_elements_by_category_and_description(category, search_strings, linked_do
                     if param.HasValue and param.StorageType == StorageType.String:
                         value = param.AsString().lower()
                         if any(search.lower() in value for search in search_strings):
-                            elements.append(element)
+                            elements.append((element, linked_doc))  # Store the element and its document
                             break
-    print(f"Found {len(elements)} elements of category {category} matching search strings in linked documents")  # Debugging
+    print(f"Found {len(elements)} elements of category {category} matching search strings in linked documents")
     return elements
 
 def print_element_info(elements, category_name):
@@ -365,29 +339,12 @@ def print_element_info(elements, category_name):
     print(f"  ... and {len(elements) - 5} more elements") if len(elements) > 5 else None
 
 def create_excel_report(comparison_data, output_path):
-    """
-    Create an Excel report from the comparison data.
-
-    Args:
-        comparison_data (List[Dict]): List of dictionaries containing source, nearest target, and distance.
-        output_path (str): The file path to save the Excel report.
-    """
-    def get_sort_key(item):
-        source = item['source']
-        return (
-            safe_get_property(source, 'Category'),
-            safe_get_property(source, 'Family'),
-            safe_get_property(source, 'Name')
-        )
-
-    sorted_data = sorted(comparison_data, key=get_sort_key)
-    
     wb = openpyxl.Workbook()
     ws_details = wb.active
     ws_details.title = "Type Comparison Details"
     
-    headers = ["Source ID", "Source Category", "Source Family", "Source Type", "Source Mark",
-               "Nearest Target ID", "Target Category", "Target Family", "Target Type", "Target Mark",
+    headers = ["Source UniqueId", "Source Document", "Source Category", "Source Family", "Source Type", "Source Mark",
+               "Nearest Target UniqueId", "Target Document", "Target Category", "Target Family", "Target Type", "Target Mark",
                "Distance (m)"]
     
     for col, header in enumerate(headers, start=1):
@@ -395,33 +352,33 @@ def create_excel_report(comparison_data, output_path):
         cell.font = Font(bold=True)
         cell.alignment = Alignment(horizontal='center')
     
-    for row, data in enumerate(sorted_data, start=2):
+    for row, data in enumerate(comparison_data, start=2):
         source = data['source']
         target = data['nearest_target']
         
-        ws_details.cell(row=row, column=1, value=source.Id.IntegerValue)
-        ws_details.cell(row=row, column=2, value=safe_get_property(source, 'Category'))
-        ws_details.cell(row=row, column=3, value=safe_get_property(source, 'Family'))
-        ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Name'))
-        ws_details.cell(row=row, column=5, value=get_parameter_value(source, 'Mark'))
+        ws_details.cell(row=row, column=1, value=source.UniqueId)
+        ws_details.cell(row=row, column=2, value=data['source_doc'].Title)
+        ws_details.cell(row=row, column=3, value=safe_get_property(source, 'Category'))
+        ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Family'))
+        ws_details.cell(row=row, column=5, value=safe_get_property(source, 'Name'))
+        ws_details.cell(row=row, column=6, value=get_parameter_value(source, 'Mark'))
         
-        ws_details.cell(row=row, column=6, value=target.Id.IntegerValue)
-        ws_details.cell(row=row, column=7, value=safe_get_property(target, 'Category'))
-        ws_details.cell(row=row, column=8, value=safe_get_property(target, 'Family'))
-        ws_details.cell(row=row, column=9, value=safe_get_property(target, 'Name'))
-        ws_details.cell(row=row, column=10, value=get_parameter_value(target, 'Mark'))
+        ws_details.cell(row=row, column=7, value=target.UniqueId if target else "N/A")
+        ws_details.cell(row=row, column=8, value=data['target_doc'].Title if target else "N/A")
+        ws_details.cell(row=row, column=9, value=safe_get_property(target, 'Category') if target else "N/A")
+        ws_details.cell(row=row, column=10, value=safe_get_property(target, 'Family') if target else "N/A")
+        ws_details.cell(row=row, column=11, value=safe_get_property(target, 'Name') if target else "N/A")
+        ws_details.cell(row=row, column=12, value=get_parameter_value(target, 'Mark') if target else "N/A")
         
-        ws_details.cell(row=row, column=11, value=round(data['distance'], 2))  # Round to 2 decimal places
+        ws_details.cell(row=row, column=13, value=round(data['distance'], 2))
 
-    # Adjust column widths for better readability
+    # Adjust column widths and add filters as before
     for column in ws_details.columns:
         max_length = max(len(str(cell.value)) for cell in column)
         column_letter = column[0].column_letter
-        ws_details.column_dimensions[column_letter].width = max_length
+        ws_details.column_dimensions[column_letter].width = max_length + 2
 
     ws_details.auto_filter.ref = ws_details.dimensions
-
-    # Freeze the top row
     ws_details.freeze_panes = ws_details['A2']
 
     wb.save(output_path)
