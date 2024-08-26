@@ -19,6 +19,7 @@ from System.Windows.Forms import FolderBrowserDialog, DialogResult
 from System.Collections.Generic import List
 
 import System
+from System import Guid
 import datetime
 import openpyxl
 from openpyxl.styles import Font, Alignment
@@ -72,14 +73,43 @@ def get_linked_documents():
     print(f"Found {len(linked_docs)} linked documents.")
     return linked_docs
 
-def get_3d_view_family_type():
+def create_parameter_filters(doc, name, category_id, search_strings):
+    category = doc.Settings.Categories.get_Item(category_id)
+    if not category:
+        raise ValueError(f"Category not found for id: {category_id}")
+
+    print(f"Creating filters for category: {category.Name}")
+
+    # Use "Family and Type" parameter instead of ELEM_FAMILY_PARAM
+    family_and_type_param_id = ElementId(BuiltInParameter.ELEM_FAMILY_AND_TYPE_PARAM)
+    
+    filters = []
+    for i, search_string in enumerate(search_strings.split(',')):
+        if search_string.strip():
+            try:
+                rule = ParameterFilterRuleFactory.CreateContainsRule(family_and_type_param_id, search_string.strip(), False)
+                element_filter = ElementParameterFilter(rule)
+                filter_name = f"{name}_{i+1}"
+                filter_element = ParameterFilterElement.Create(doc, filter_name, List[ElementId]([category_id]), element_filter)
+                filters.append(filter_element)
+                print(f"Created filter for search string: '{search_string.strip()}'")
+            except Exception as e:
+                print(f"Error creating filter for '{search_string.strip()}': {str(e)}")
+    
+    if not filters:
+        raise ValueError(f"No valid filters created for category: {category.Name}")
+
+    print(f"Created {len(filters)} filters")
+    return filters
+    
+def get_3d_view_family_type(doc):
     view_family_types = FilteredElementCollector(doc).OfClass(ViewFamilyType).ToElements()
     for vft in view_family_types:
         if vft.ViewFamily == ViewFamily.ThreeDimensional:
             return vft.Id
     return None
 
-def get_elements_from_linked_docs(category):
+def get_elements_from_linked_docs(doc, category):
     elements = []
     links = FilteredElementCollector(doc).OfClass(RevitLinkInstance).ToElements()
     for link in links:
@@ -88,59 +118,113 @@ def get_elements_from_linked_docs(category):
             elements.extend(FilteredElementCollector(link_doc).OfCategory(category).WhereElementIsNotElementType().ToElements())
     return elements
 
-def create_parameter_filter(doc, name, category_id, parameter_id, rule_string):
-    filter_rules = FilterStringRule(parameter_id, FilterStringEquals(), rule_string, False)
-    param_filter = ElementParameterFilter(filter_rules)
-    
-    return ParameterFilterElement.Create(doc, name, [category_id], param_filter)
-
-def create_3d_view_with_elements(power_devices, outlets, view_name="Power Devices and Outlets"):
-    t = Transaction(doc, "Create 3D View")
+def create_or_modify_3d_view(doc, power_devices, outlets, view_name="VDC - HVAC ELEC verification", is_new_view=False):
+    print(f"{'Creating' if is_new_view else 'Modifying'} 3D view: {view_name}")
+    t = Transaction(doc, f"{'Create' if is_new_view else 'Modify'} 3D View")
     try:
         t.Start()
         
-        view_family_type_id = get_3d_view_family_type()
-        if view_family_type_id is None:
-            raise Exception("No 3D view family type found in the document.")
+        if is_new_view:
+            view_family_type_id = get_3d_view_family_type(doc)
+            if view_family_type_id is None or doc.GetElement(view_family_type_id).ViewFamily != ViewFamily.ThreeDimensional:
+                raise ValueError("Invalid or missing 3D view family type.")
+            
+            new_3d_view = View3D.CreateIsometric(doc, view_family_type_id)
+            try:
+                new_3d_view.Name = view_name
+            except Autodesk.Revit.Exceptions.ArgumentException:
+                new_3d_view.Name = f"{view_name}_{Guid.NewGuid().ToString()}"
+            view = new_3d_view
+        else:
+            view = next((v for v in FilteredElementCollector(doc).OfClass(View3D) 
+                         if not v.IsTemplate and v.Name == view_name), None)
+            if not view:
+                raise ValueError(f"Existing view '{view_name}' not found.")
+
+        # Apply view template
+        view_template = create_or_get_view_template(doc, "VDC - HVAC ELEC verification")
+        if view_template:
+            view.ViewTemplateId = view_template.Id
         
-        new_3d_view = View3D.CreateIsometric(doc, view_family_type_id)
-        new_3d_view.Name = view_name
-        new_3d_view.DetailLevel = ViewDetailLevel.Fine
-        new_3d_view.DisplayStyle = DisplayStyle.Realistic
-        
-        # Get floors and walls from linked documents
-        floors = get_elements_from_linked_docs(BuiltInCategory.OST_Floors)
-        walls = get_elements_from_linked_docs(BuiltInCategory.OST_Walls)
+        print("Getting floors and walls from linked documents...")
+        floors = get_elements_from_linked_docs(doc, BuiltInCategory.OST_Floors)
+        walls = get_elements_from_linked_docs(doc, BuiltInCategory.OST_Walls)
         
         print(f"Number of power devices: {len(power_devices)}")
         print(f"Number of outlets: {len(outlets)}")
         print(f"Number of floors from linked docs: {len(floors)}")
         print(f"Number of walls from linked docs: {len(walls)}")
         
-        # Set visibility for power devices and outlets
         all_visible_elements = power_devices + outlets + floors + walls
         
-        # Hide all elements except the ones we want to show
-        all_elements = FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()
-        elements_to_hide = [e.Id for e in all_elements if e.Id not in [elem.Id for elem in all_visible_elements]]
-        new_3d_view.HideElements(List[ElementId](elements_to_hide))
+        print("Isolating visible elements...")
+        elements_to_isolate = List[ElementId]([elem.Id for elem in all_visible_elements])
+        view.IsolateElementsTemporary(elements_to_isolate)
         
-        # Set transparency for floors and walls
+        print("Setting transparency for floors and walls...")
         override_settings = OverrideGraphicSettings()
         override_settings.SetSurfaceTransparency(90)
         
-        for element in floors + walls:
-            new_3d_view.SetElementOverrides(element.Id, override_settings)
+        batch_size = 1000
+        total_elements = len(floors) + len(walls)
+        for i in range(0, total_elements, batch_size):
+            batch = (floors + walls)[i:i+batch_size]
+            for element in batch:
+                view.SetElementOverrides(element.Id, override_settings)
+            print(f"Applied overrides to batch {i//batch_size + 1} of {(total_elements-1)//batch_size + 1}")
         
         t.Commit()
-        return new_3d_view
+        print(f"Successfully {'created' if is_new_view else 'modified'} 3D view: {view.Name}")
+        return view
     except Exception as e:
-        t.RollBack()
-        print(f"Error creating 3D view: {str(e)}")
-        return None
-    finally:
         if t.HasStarted() and not t.HasEnded():
             t.RollBack()
+        print(f"Error {'creating' if is_new_view else 'modifying'} 3D view: {str(e)}")
+        print(traceback.format_exc())
+        return None
+
+def create_or_get_view_template(doc, template_name):
+    existing_template = next((v for v in FilteredElementCollector(doc).OfClass(View3D)
+                              if v.IsTemplate and v.Name == template_name), None)
+    if existing_template:
+        return existing_template
+
+    t = Transaction(doc, "Create View Template")
+    t.Start()
+    try:
+        view_family_type_id = next(vft.Id for vft in FilteredElementCollector(doc).OfClass(ViewFamilyType)
+                                   if vft.ViewFamily == ViewFamily.ThreeDimensional)
+        
+        new_template = View3D.CreateIsometric(doc, view_family_type_id)
+        new_template.Name = template_name
+        new_template.ViewTemplateId = ElementId.InvalidElementId
+        
+        # Set view properties
+        new_template.DetailLevel = ViewDetailLevel.Fine
+        new_template.DisplayStyle = DisplayStyle.Realistic
+
+        # Hide categories except MEP and Architecture
+        all_categories = doc.Settings.Categories
+        for category in all_categories:
+            if category.CategoryType == CategoryType.Model:
+                if category.Id.IntegerValue not in [-2001140, -2001060, -2000032, -2000011]:  # MEP Equipment, Electrical Fixtures, Floors, Walls
+                    try:
+                        new_template.SetCategoryHidden(category.Id, True)
+                    except:
+                        print(f"Could not hide category: {category.Name}")
+
+        # Set transparency for floors and walls
+        override_settings = OverrideGraphicSettings()
+        override_settings.SetSurfaceTransparency(90)
+        new_template.SetCategoryOverrides(ElementId(BuiltInCategory.OST_Floors), override_settings)
+        new_template.SetCategoryOverrides(ElementId(BuiltInCategory.OST_Walls), override_settings)
+
+        t.Commit()
+        return new_template
+    except Exception as e:
+        t.RollBack()
+        print(f"Error creating view template: {str(e)}")
+        return None
 
 def get_elements_by_type_ids_from_linked_docs(type_ids, linked_docs):
     """
@@ -434,6 +518,8 @@ def get_parameter_value(element, param_name):
     return None
     
 def main():
+    clear_all_lru_caches()
+
     folder_path = get_folder_path("Select a folder to save the Excel report")
     if not validate_folder_path(folder_path):
         return
@@ -443,21 +529,6 @@ def main():
         TaskDialog.Show("Error", "No linked documents found.")
         return
 
-    # power_device_type_ids = get_mechanical_equipment_type_ids_by_name("AES")
-    # power_device_type_ids.extend(get_mechanical_equipment_type_ids_by_name("מעבים"))
-    # outlet_type_ids = get_electrical_fixtures_type_ids_by_description("Socket")
-    # outlet_type_ids.extend(get_electrical_fixtures_type_ids_by_description("בית תקע"))
-
-    # print(f"Total power device type IDs: {len(power_device_type_ids)}")  # Debugging
-    # print(f"Total outlet type IDs: {len(outlet_type_ids)}")  # Debugging
-
-    # power_devices = get_elements_by_type_ids_from_linked_docs(power_device_type_ids, linked_docs)
-    # outlets = get_elements_by_type_ids_from_linked_docs(outlet_type_ids, linked_docs)
-
-    # print(f"Total power devices found: {len(power_devices)}")  # Debugging
-    # print(f"Total outlets found: {len(outlets)}")  # Debugging
-
-    # Get power devices and outlets from linked documents
     power_devices = get_elements_by_category_and_description(
         BuiltInCategory.OST_MechanicalEquipment,
         ["AES", "מעבים"],
@@ -469,25 +540,31 @@ def main():
         linked_docs
     )
 
-    # print_element_info(power_devices, "Power Devices")
-    # print_element_info(outlets, "Outlets")
-
     results = calculate_nearest_distance(power_devices, outlets)
 
-    print(f"Total results: {len(results)}")  # Debugging
+    print(f"Total results: {len(results)}")
 
     output_path = os.path.join(folder_path, "Comparison_Report.xlsx")
     create_excel_report(results, output_path)
 
-    new_view = create_3d_view_with_elements(power_devices, outlets)
+    view_name = "VDC - HVAC ELEC verification"
     
-    if new_view:
-        # Set the active view to the new 3D view
-        uidoc.ActiveView = new_view
-        TaskDialog.Show("Success", "3D view created successfully.")
-    else:     
-        TaskDialog.Show("Error", "Failed to create 3D view.")
+    # Check if the view already exists
+    existing_view = next((view for view in FilteredElementCollector(doc).OfClass(View3D) 
+                          if not view.IsTemplate and view.Name == view_name), None)
+    
+    is_new_view = existing_view is None
+    modified_view = create_or_modify_3d_view(doc, power_devices, outlets, view_name, is_new_view)
+    
+    if modified_view:
+        uidoc.ActiveView = modified_view
+        action = "created" if is_new_view else "modified"
+        TaskDialog.Show("Success", f"3D view '{view_name}' {action} successfully.")
+    else:
+        action = "create" if is_new_view else "modify"
+        TaskDialog.Show("Error", f"Failed to {action} 3D view '{view_name}'. Check the script output for details.")
 
+    clear_all_lru_caches()
 
 if __name__ == '__main__':
     main()
