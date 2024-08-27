@@ -6,13 +6,14 @@ clr.AddReference('RevitAPIUI')
 from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI import *
 import sys
+import traceback        
 from pyrevit import script
 from System.Windows import Clipboard
+from System.Collections.Generic import List
 
 # Function to log messages
 def log(message):
     print(message)
-    script.get_output().print_md(message)
 
 try:
     doc = __revit__.ActiveUIDocument.Document
@@ -36,7 +37,10 @@ try:
         element = find_element_by_unique_id(doc, unique_id)
         
         if element:
-            uidoc.Selection.SetElementIds([element.Id])
+            # Create a List[ElementId] for selection
+            ids_to_select = List[ElementId]()
+            ids_to_select.Add(element.Id)
+            uidoc.Selection.SetElementIds(ids_to_select)
             log(f"Element with UniqueId {unique_id} has been selected in the active document.")
         else:
             log("Element not found in active document. Searching in linked documents...")
@@ -64,4 +68,4 @@ try:
 except Exception as e:
     log(f"An error occurred: {str(e)}")
     import traceback
-    log(f"Stack trace:\n{traceback.format_exc()}")
+    log(f"Stack trace:\n{traceback.format_exc()}")  # noqa: E501

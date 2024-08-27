@@ -339,50 +339,54 @@ def print_element_info(elements, category_name):
     print(f"  ... and {len(elements) - 5} more elements") if len(elements) > 5 else None
 
 def create_excel_report(comparison_data, output_path):
-    wb = openpyxl.Workbook()
-    ws_details = wb.active
-    ws_details.title = "Type Comparison Details"
-    
-    headers = ["Source UniqueId", "Source Document", "Source Category", "Source Family", "Source Type", "Source Mark",
-               "Nearest Target UniqueId", "Target Document", "Target Category", "Target Family", "Target Type", "Target Mark",
-               "Distance (m)"]
-    
-    for col, header in enumerate(headers, start=1):
-        cell = ws_details.cell(row=1, column=col, value=header)
-        cell.font = Font(bold=True)
-        cell.alignment = Alignment(horizontal='center')
-    
-    for row, data in enumerate(comparison_data, start=2):
-        source = data['source']
-        target = data['nearest_target']
+    try:
+        wb = openpyxl.Workbook()
+        ws_details = wb.active
+        ws_details.title = "Type Comparison Details"
         
-        ws_details.cell(row=row, column=1, value=source.UniqueId)
-        ws_details.cell(row=row, column=2, value=data['source_doc'].Title)
-        ws_details.cell(row=row, column=3, value=safe_get_property(source, 'Category'))
-        ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Family'))
-        ws_details.cell(row=row, column=5, value=safe_get_property(source, 'Name'))
-        ws_details.cell(row=row, column=6, value=get_parameter_value(source, 'Mark'))
+        headers = ["Source UniqueId", "Source Document", "Source Category", "Source Family", "Source Type", "Source Mark",
+                "Nearest Target UniqueId", "Target Document", "Target Category", "Target Family", "Target Type", "Target Mark",
+                "Distance (m)"]
         
-        ws_details.cell(row=row, column=7, value=target.UniqueId if target else "N/A")
-        ws_details.cell(row=row, column=8, value=data['target_doc'].Title if target else "N/A")
-        ws_details.cell(row=row, column=9, value=safe_get_property(target, 'Category') if target else "N/A")
-        ws_details.cell(row=row, column=10, value=safe_get_property(target, 'Family') if target else "N/A")
-        ws_details.cell(row=row, column=11, value=safe_get_property(target, 'Name') if target else "N/A")
-        ws_details.cell(row=row, column=12, value=get_parameter_value(target, 'Mark') if target else "N/A")
+        for col, header in enumerate(headers, start=1):
+            cell = ws_details.cell(row=1, column=col, value=header)
+            cell.font = Font(bold=True)
+            cell.alignment = Alignment(horizontal='center')
         
-        ws_details.cell(row=row, column=13, value=round(data['distance'], 2))
+        for row, data in enumerate(comparison_data, start=2):
+            source = data['source']
+            target = data['nearest_target']
+            
+            ws_details.cell(row=row, column=1, value=source.UniqueId)
+            ws_details.cell(row=row, column=2, value=data['source_doc'].Title)
+            ws_details.cell(row=row, column=3, value=safe_get_property(source, 'Category'))
+            ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Family'))
+            ws_details.cell(row=row, column=5, value=safe_get_property(source, 'Name'))
+            ws_details.cell(row=row, column=6, value=get_parameter_value(source, 'Mark'))
+            
+            ws_details.cell(row=row, column=7, value=target.UniqueId if target else "N/A")
+            ws_details.cell(row=row, column=8, value=data['target_doc'].Title if target else "N/A")
+            ws_details.cell(row=row, column=9, value=safe_get_property(target, 'Category') if target else "N/A")
+            ws_details.cell(row=row, column=10, value=safe_get_property(target, 'Family') if target else "N/A")
+            ws_details.cell(row=row, column=11, value=safe_get_property(target, 'Name') if target else "N/A")
+            ws_details.cell(row=row, column=12, value=get_parameter_value(target, 'Mark') if target else "N/A")
+            
+            ws_details.cell(row=row, column=13, value=round(data['distance'], 2))
 
-    # Adjust column widths and add filters as before
-    for column in ws_details.columns:
-        max_length = max(len(str(cell.value)) for cell in column)
-        column_letter = column[0].column_letter
-        ws_details.column_dimensions[column_letter].width = max_length + 2
+        # Adjust column widths and add filters as before
+        for column in ws_details.columns:
+            max_length = max(len(str(cell.value)) for cell in column)
+            column_letter = column[0].column_letter
+            ws_details.column_dimensions[column_letter].width = max_length + 2
 
-    ws_details.auto_filter.ref = ws_details.dimensions
-    ws_details.freeze_panes = ws_details['A2']
+        ws_details.auto_filter.ref = ws_details.dimensions
+        ws_details.freeze_panes = ws_details['A2']
 
-    wb.save(output_path)
-    print(f"Excel report saved to {output_path}")
+        wb.save(output_path)
+        print(f"Excel report saved to {output_path}")
+    except Exception as e:
+        print(f"Error creating Excel report to {output_path}: {str(e)}")
+        print(traceback.format_exc())
 
 def get_folder_path(prompt):
     try:
