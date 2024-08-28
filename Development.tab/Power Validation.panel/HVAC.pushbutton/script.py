@@ -259,13 +259,14 @@ def calculate_nearest_distance(source_elements, target_elements):
     total_comparisons = len(source_elements) * len(target_elements)
     
     with tqdm(total=total_comparisons, desc="Calculating distances") as pbar:
-        for source, source_doc in source_elements:
+        for source, source_doc, local_source in source_elements:
             source_point = source.Location.Point
             min_distance = float('inf')
             nearest_target = None
             nearest_target_doc = None
+            nearest_local_target = None
             
-            for target, target_doc in target_elements:
+            for target, target_doc, local_target in target_elements:
                 target_point = target.Location.Point
                 distance = calculate_distance(source_point, target_point)
                 
@@ -273,20 +274,23 @@ def calculate_nearest_distance(source_elements, target_elements):
                     min_distance = distance
                     nearest_target = target
                     nearest_target_doc = target_doc
+                    nearest_local_target = local_target
                 
                 pbar.update(1)
             
             results.append({
                 'source': source,
                 'source_doc': source_doc,
+                'local_source': local_source,
                 'nearest_target': nearest_target,
                 'target_doc': nearest_target_doc,
+                'local_target': nearest_local_target,
                 'distance': min_distance
             })
     
     return results
 
-def get_elements_by_category_and_description(category, search_strings, linked_docs):
+def get_elements_by_category_and_description(category, search_strings, linked_docs, host_doc, workset_name=None):
     elements = []
     for linked_doc in linked_docs:
         collector = FilteredElementCollector(linked_doc).OfCategory(category).WhereElementIsNotElementType()
@@ -297,11 +301,35 @@ def get_elements_by_category_and_description(category, search_strings, linked_do
                     if param.HasValue and param.StorageType == StorageType.String:
                         value = param.AsString().lower()
                         if any(search.lower() in value for search in search_strings):
-                            elements.append((element, linked_doc))  # Store the element and its document
+                            # Try to get the local representation
+                            local_element = None
+                            try:
+                                # First, try to find a matching element in the specified workset
+                                if workset_name:
+                                    workset_table = host_doc.GetWorksetTable()
+                                    workset = next((ws for ws in workset_table.GetWorksets() if ws.Name == workset_name), None)
+                                    if workset:
+                                        local_collector = FilteredElementCollector(host_doc).OfCategory(category).WhereElementIsNotElementType().OnWorkset(workset.Id)
+                                        for local_elem in local_collector:
+                                            if local_elem.Name == element.Name and local_elem.GetTypeId().IntegerValue == element.GetTypeId().IntegerValue:
+                                                local_element = local_elem
+                                                break
+                                
+                                # If not found in the specific workset, try in all worksets
+                                if local_element is None:
+                                    local_collector = FilteredElementCollector(host_doc).OfCategory(category).WhereElementIsNotElementType()
+                                    for local_elem in local_collector:
+                                        if local_elem.Name == element.Name and local_elem.GetTypeId().IntegerValue == element.GetTypeId().IntegerValue:
+                                            local_element = local_elem
+                                            break
+                            except Exception as e:
+                                print(f"Error getting local element: {str(e)}")
+                            
+                            elements.append((element, linked_doc, local_element))
                             break
     print(f"Found {len(elements)} elements of category {category} matching search strings in linked documents")
     return elements
-
+    
 def print_element_info(elements, category_name):
     """
     Print detailed information about elements.
@@ -344,9 +372,9 @@ def create_excel_report(comparison_data, output_path):
         ws_details = wb.active
         ws_details.title = "Type Comparison Details"
         
-        headers = ["Source UniqueId", "Source Document", "Source Category", "Source Family", "Source Type", "Source Mark",
-                "Nearest Target UniqueId", "Target Document", "Target Category", "Target Family", "Target Type", "Target Mark",
-                "Distance (m)"]
+        headers = ["Source Linked UniqueId", "Source Local UniqueId", "Source Document", "Source Category", "Source Family", "Source Type", "Source Mark",
+                   "Nearest Target Linked UniqueId", "Nearest Target Local UniqueId", "Target Document", "Target Category", "Target Family", "Target Type", "Target Mark",
+                   "Distance (m)"]
         
         for col, header in enumerate(headers, start=1):
             cell = ws_details.cell(row=1, column=col, value=header)
@@ -355,25 +383,29 @@ def create_excel_report(comparison_data, output_path):
         
         for row, data in enumerate(comparison_data, start=2):
             source = data['source']
+            local_source = data['local_source']
             target = data['nearest_target']
+            local_target = data['local_target']
             
             ws_details.cell(row=row, column=1, value=source.UniqueId)
-            ws_details.cell(row=row, column=2, value=data['source_doc'].Title)
-            ws_details.cell(row=row, column=3, value=safe_get_property(source, 'Category'))
-            ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Family'))
-            ws_details.cell(row=row, column=5, value=safe_get_property(source, 'Name'))
-            ws_details.cell(row=row, column=6, value=get_parameter_value(source, 'Mark'))
+            ws_details.cell(row=row, column=2, value=local_source.UniqueId if local_source else "N/A")
+            ws_details.cell(row=row, column=3, value=data['source_doc'].Title)
+            ws_details.cell(row=row, column=4, value=safe_get_property(source, 'Category'))
+            ws_details.cell(row=row, column=5, value=safe_get_property(source, 'Family'))
+            ws_details.cell(row=row, column=6, value=safe_get_property(source, 'Name'))
+            ws_details.cell(row=row, column=7, value=get_parameter_value(source, 'Mark'))
             
-            ws_details.cell(row=row, column=7, value=target.UniqueId if target else "N/A")
-            ws_details.cell(row=row, column=8, value=data['target_doc'].Title if target else "N/A")
-            ws_details.cell(row=row, column=9, value=safe_get_property(target, 'Category') if target else "N/A")
-            ws_details.cell(row=row, column=10, value=safe_get_property(target, 'Family') if target else "N/A")
-            ws_details.cell(row=row, column=11, value=safe_get_property(target, 'Name') if target else "N/A")
-            ws_details.cell(row=row, column=12, value=get_parameter_value(target, 'Mark') if target else "N/A")
+            ws_details.cell(row=row, column=8, value=target.UniqueId if target else "N/A")
+            ws_details.cell(row=row, column=9, value=local_target.UniqueId if local_target else "N/A")
+            ws_details.cell(row=row, column=10, value=data['target_doc'].Title if target else "N/A")
+            ws_details.cell(row=row, column=11, value=safe_get_property(target, 'Category') if target else "N/A")
+            ws_details.cell(row=row, column=12, value=safe_get_property(target, 'Family') if target else "N/A")
+            ws_details.cell(row=row, column=13, value=safe_get_property(target, 'Name') if target else "N/A")
+            ws_details.cell(row=row, column=14, value=get_parameter_value(target, 'Mark') if target else "N/A")
             
-            ws_details.cell(row=row, column=13, value=round(data['distance'], 2))
+            ws_details.cell(row=row, column=15, value=round(data['distance'], 2))
 
-        # Adjust column widths and add filters as before
+        # Adjust column widths and add filters
         for column in ws_details.columns:
             max_length = max(len(str(cell.value)) for cell in column)
             column_letter = column[0].column_letter
@@ -387,7 +419,7 @@ def create_excel_report(comparison_data, output_path):
     except Exception as e:
         print(f"Error creating Excel report to {output_path}: {str(e)}")
         print(traceback.format_exc())
-
+        
 def get_folder_path(prompt):
     try:
         from System.Windows.Forms import FolderBrowserDialog, DialogResult
@@ -493,12 +525,14 @@ def main():
     power_devices = get_elements_by_category_and_description(
         BuiltInCategory.OST_MechanicalEquipment,
         ["AES", "מעבים"],
-        linked_docs
+        linked_docs,
+        doc  # Pass the host document
     )
     outlets = get_elements_by_category_and_description(
         BuiltInCategory.OST_ElectricalFixtures,
         ["Socket", "בית תקע"],
-        linked_docs
+        linked_docs,
+        doc  # Pass the host document
     )
 
     results = calculate_nearest_distance(power_devices, outlets)
