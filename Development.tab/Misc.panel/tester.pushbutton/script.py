@@ -267,7 +267,7 @@ def get_element_info(element, document, transform=None):
         "FamilyName": element.Symbol.FamilyName if hasattr(element, 'Symbol') else "N/A",
         "TypeName": element.Name,
         "TypeId": element.GetTypeId().IntegerValue,
-        "Location": f"({location.X:.2f}, {location.Y:.2f}, {location.Z:.2f})" if location else "N/A",
+        "Location": location,
         "Mark": element.get_Parameter(BuiltInParameter.ALL_MODEL_MARK).AsString() if element.get_Parameter(BuiltInParameter.ALL_MODEL_MARK) else "N/A",
         "Comments": element.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS).AsString() if element.get_Parameter(BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS) else "N/A"
     }
@@ -298,15 +298,20 @@ def write_to_excel(data, sheet_name, workbook):
     # Write data
     for row, item in enumerate(data, start=2):
         for col, (key, value) in enumerate(item.items(), start=1):
-            sheet.cell(row=row, column=col, value=str(value))
+            if isinstance(value, XYZ):
+                sheet.cell(row=row, column=col, value=f"({value.X:.2f}, {value.Y:.2f}, {value.Z:.2f})")
+            else:
+                sheet.cell(row=row, column=col, value=str(value))
+
+    # Freeze the top row
+    sheet.freeze_panes = sheet["A2"]
 
 def find_matches(local_elements, linked_elements):
     matches = []
     for local_elem in tqdm(local_elements, desc="Finding matches"):
         for linked_elem in linked_elements:
-            if (local_elem["Name"] == linked_elem["Name"] and 
-                local_elem["TypeId"] == linked_elem["TypeId"]):
-                matches.append({
+            if (local_elem["Name"] == linked_elem["Name"]):
+                match = {
                     "Local_Document": local_elem["Document"],
                     "Local_WorksetId": local_elem["WorksetId"],
                     "Local_UniqueId": local_elem["UniqueId"],
@@ -321,23 +326,21 @@ def find_matches(local_elements, linked_elements):
                     "Linked_Name": linked_elem["Name"],
                     "Linked_TypeId": linked_elem["TypeId"],
                     "Linked_Location": linked_elem["Location"]
-                })
+                }
+                matches.append(match)
     return matches
 
 def main():
-    output_file = r"C:\Temp\MechanicalEquipmentAnalysis.xlsx"
+    output_file = r"C:\Users\orias\Desktop\MechanicalEquipmentAnalysis.xlsx"
     workbook = openpyxl.Workbook()
 
-    # Get project base point
-    base_point = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_ProjectBasePoint).FirstElement()
-    if base_point:
-        origin = XYZ(
-            base_point.get_Parameter(BuiltInParameter.BASEPOINT_EASTWEST_PARAM).AsDouble(),
-            base_point.get_Parameter(BuiltInParameter.BASEPOINT_NORTHSOUTH_PARAM).AsDouble(),
-            base_point.get_Parameter(BuiltInParameter.BASEPOINT_ELEVATION_PARAM).AsDouble()
-        )
-    else:
-        origin = XYZ(0, 0, 0)
+    # Get local base point
+    local_base_point = FilteredElementCollector(doc).OfCategory(BuiltInCategory.OST_ProjectBasePoint).FirstElement()
+    local_origin = XYZ(
+        local_base_point.get_Parameter(BuiltInParameter.BASEPOINT_EASTWEST_PARAM).AsDouble(),
+        local_base_point.get_Parameter(BuiltInParameter.BASEPOINT_NORTHSOUTH_PARAM).AsDouble(),
+        local_base_point.get_Parameter(BuiltInParameter.BASEPOINT_ELEVATION_PARAM).AsDouble()
+    ) if local_base_point else XYZ(0, 0, 0)
 
     # 1. Get all mechanical equipment elements from the local model
     local_mech_equipment = list(tqdm(get_mech_equipment(doc), desc="Processing local elements"))
@@ -353,12 +356,27 @@ def main():
     linked_info = [get_element_info(elem, doc, transform) for elem, doc, transform in linked_mech_equipment]
     print(f"Found {len(linked_mech_equipment)} mechanical equipment elements in linked models.")
 
-    # Adjust locations
-    for info in local_info + linked_info:
-        if info["Location"] != "N/A":
-            x, y, z = map(float, info["Location"][1:-1].split(", "))
-            adjusted_location = XYZ(x - origin.X, y - origin.Y, z - origin.Z)
-            info["Location"] = f"({adjusted_location.X:.2f}, {adjusted_location.Y:.2f}, {adjusted_location.Z:.2f})"
+    # Create a dictionary to store linked documents and their base points
+    linked_docs_dict = {linked_doc.Title: (linked_doc, transform) for linked_doc, transform in linked_docs}
+
+    # Adjust locations for linked elements only
+    for info in linked_info:
+        if isinstance(info["Location"], XYZ):
+            linked_doc = linked_docs_dict.get(info["Document"])[0]  # Get only the linked_doc, ignore transform
+            if linked_doc:
+                linked_base_point = FilteredElementCollector(linked_doc).OfCategory(BuiltInCategory.OST_ProjectBasePoint).FirstElement()
+                linked_origin = XYZ(
+                    linked_base_point.get_Parameter(BuiltInParameter.BASEPOINT_EASTWEST_PARAM).AsDouble(),
+                    linked_base_point.get_Parameter(BuiltInParameter.BASEPOINT_NORTHSOUTH_PARAM).AsDouble(),
+                    linked_base_point.get_Parameter(BuiltInParameter.BASEPOINT_ELEVATION_PARAM).AsDouble()
+                ) if linked_base_point else XYZ(0, 0, 0)
+                
+                # Apply only the heuristic, without additional transformation
+                info["Location"] = XYZ(
+                    info["Location"].X - linked_origin.X + local_origin.X,
+                    info["Location"].Y - linked_origin.Y + local_origin.Y,
+                    info["Location"].Z - linked_origin.Z + local_origin.Z
+                )
 
     # Write data to Excel
     write_to_excel(local_info, "Local Elements", workbook)
@@ -366,10 +384,12 @@ def main():
 
     # Find and write matches
     matches = find_matches(local_info, linked_info)
+    print(f"Found {len(matches)} potential matches.")
     write_to_excel(matches, "Potential Matches", workbook)
 
     # Remove default sheet
-    workbook.remove(workbook['Sheet'])
+    if 'Sheet' in workbook.sheetnames:
+        workbook.remove(workbook['Sheet'])
 
     # Save the workbook
     workbook.save(output_file)
