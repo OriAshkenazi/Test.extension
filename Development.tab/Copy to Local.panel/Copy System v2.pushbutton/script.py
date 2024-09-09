@@ -18,6 +18,7 @@ from datetime import datetime
 from tqdm import tqdm
 
 import sys
+import time
 import traceback
 import logging
 import os
@@ -25,19 +26,39 @@ import os
 doc = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
 
-# Define the log directory
-log_dir = r"C:\Users\orias\Documents\exports\copy system\124"
+def setup_logging():
+    try:
+        print("Starting logging setup...")
+        log_dir = r"C:\Users\orias\Documents\exports\copy system\124"
+        
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+        
+        log_file = os.path.join(log_dir, f"revit_system_copy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
 
-# Ensure the directory exists
-os.makedirs(log_dir, exist_ok=True)
+        # Remove all existing handlers to reset the logger setup
+        logger = logging.getLogger()
+        if logger.hasHandlers():
+            for handler in logger.handlers[:]:
+                logger.removeHandler(handler)
 
-# Set up logging
-log_file = os.path.join(log_dir, f"revit_system_copy_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-logging.basicConfig(filename=log_file, level=logging.INFO,
-                    format='%(asctime)s - %(levelname)s - %(message)s')
+        # Set up new handler
+        logging.basicConfig(filename=log_file, level=logging.INFO,
+                            format='%(levelname)s - %(message)s',
+                            datefmt='%Y-%m-%d %H:%M:%S')
+        
+        logging.info("Log file created and writable")
+        print(f"Log file created at: {log_file}")
+        
+        return True
+    except Exception as e:
+        print(f"An error occurred while setting up logging: {str(e)}")
+        traceback.print_exc()
+        return False
 
-# Add a log message to confirm the log file location
-logging.info(f"Log file created at: {log_file}")
+if not setup_logging():
+    print("Failed to set up logging. The script will exit.")
+    sys.exit()
 
 def get_all_links():
     collector = FilteredElementCollector(doc).OfClass(RevitLinkInstance)
@@ -54,14 +75,6 @@ def get_all_system_types(linked_doc):
         if param and param.AsString():
             system_types.add(param.AsString())
     return sorted(list(system_types))
-
-def get_element_ids_by_system_type(linked_doc, system_type):
-    collector = FilteredElementCollector(linked_doc).WhereElementIsNotElementType()
-    element_ids = [elem.Id for elem in tqdm(collector, desc=f"Finding elements for {system_type}", unit="elem") if has_matching_system_type(elem, system_type)]
-    logging.info(f"Found {len(element_ids)} elements for System Type: {system_type}")
-    if element_ids:
-        logging.info(f"First few element IDs: {', '.join(str(id.IntegerValue) for id in element_ids[:5])}")
-    return element_ids
 
 def has_matching_system_type(elem, system_type):
     param = elem.get_Parameter(BuiltInParameter.RBS_SYSTEM_CLASSIFICATION_PARAM)
@@ -101,70 +114,194 @@ def calculate_transformation(source_doc, dest_doc):
 
     return source_link_instance.GetTotalTransform()
 
-def copy_system(source_doc, dest_doc, system_type, transform):
-    '''
-    Copy elements of a specific system type from source to destination document.
-    '''
-    element_ids = get_element_ids_by_system_type(source_doc, system_type)
-    element_id_list = List[ElementId](element_ids)
+def get_element_ids_by_system_type(linked_doc, system_type):
+    collector = FilteredElementCollector(linked_doc).WhereElementIsNotElementType()
     
-    # Create a dictionary to store the mapping of old to new ids
-    id_mapping = {}
+    element_id_list = List[ElementId]()
+    for elem in collector:
+        param = elem.get_Parameter(BuiltInParameter.RBS_SYSTEM_CLASSIFICATION_PARAM)
+        if param and param.AsString() == system_type:
+            element_id_list.Add(elem.Id)
     
-    # Set up options for copy/paste
+    logging.info(f"Found {element_id_list.Count} elements for System Type: {system_type}")
+    if element_id_list.Count > 0:
+        logging.info(f"First few element IDs: {', '.join(str(id.IntegerValue) for id in list(element_id_list)[:5])}")
+    
+    return element_id_list
+
+def copy_elements(source_doc, element_ids, dest_doc, new_workset):
     options = CopyPasteOptions()
-    options.SetDuplicateTypeNamesHandler(CopyUseDestination())
-    
-    # Perform the copy operation
-    new_ids = ElementTransformUtils.CopyElements(source_doc, element_id_list, dest_doc, transform, options)
-    
-    # Create the id mapping
-    for old_id, new_id in tqdm(zip(element_ids, new_ids), desc="Creating ID mapping", total=len(element_ids)):
-        id_mapping[old_id] = new_id
-    
-    return id_mapping
-
-def update_connections(dest_doc, id_mapping):
-    '''
-    Update connections and dependencies for copied elements.
-    '''
-    for old_id, new_id in tqdm(id_mapping.items(), desc="Updating connections"):
-        new_elem = dest_doc.GetElement(new_id)
-        if new_elem:
-            # Update connections (this is a simplified example, you may need to add more specific logic)
-            if hasattr(new_elem, "MEPModel") and new_elem.MEPModel:
-                for connector in new_elem.MEPModel.ConnectorManager.Connectors:
-                    if connector.IsConnected:
-                        ref_connector = connector.GetConnectedConnector()
-                        if ref_connector and ref_connector.Owner.Id in id_mapping:
-                            connector.ConnectTo(ref_connector)
-
-def copy_system_with_dependencies(source_doc, dest_doc, system_type, new_workset):
-    '''
-    Copy a system and update its dependencies.
-    '''
-    transform = calculate_transformation(source_doc, dest_doc)
+    new_ids = []
     
     try:
-        # Copy the system elements
-        id_mapping = copy_system(source_doc, dest_doc, system_type, transform)
+        transform = calculate_transformation(source_doc, dest_doc)
+        new_element_ids = ElementTransformUtils.CopyElements(source_doc, element_ids, dest_doc, transform, options)
         
-        # Update connections and dependencies
-        update_connections(dest_doc, id_mapping)
-        
-        # Assign elements to the new workset
-        for new_id in id_mapping.values():
+        for new_id in new_element_ids:
             elem = dest_doc.GetElement(new_id)
-            workset_param = elem.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
-            workset_param.Set(new_workset.Id.IntegerValue)
+            if elem:
+                try:
+                    workset_param = elem.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
+                    if workset_param and not workset_param.IsReadOnly:
+                        workset_param.Set(new_workset.Id.IntegerValue)
+                    else:
+                        logging.warning(f"Cannot set workset for element {new_id.IntegerValue}. Parameter is read-only or not found.")
+                except InvalidOperationException as ioe:
+                    logging.warning(f"Cannot set workset for element {new_id.IntegerValue}: {str(ioe)}")
+            new_ids.append(new_id)
+    except Exception as e:
+        logging.warning(f"Failed to copy elements: {str(e)}")
+    
+    return new_ids
+
+def batch_copy_elements_old(source_doc, element_ids, dest_doc, new_workset, initial_batch_size=10):
+    all_new_ids = []
+    failed_ids = []
+    total_elements = len(element_ids)
+    
+    # Create a global counter
+    global processed_count
+    processed_count = 0
+    
+    def copy_batch(batch, batch_size):
+        global processed_count
+        logging.info(f"Attempting to copy batch of {len(batch)} elements")
+        batch_list = List[ElementId]()
+        for id in batch:
+            batch_list.Add(id)
+        new_ids = copy_elements(source_doc, batch_list, dest_doc, new_workset)
+        if new_ids:
+            all_new_ids.extend(new_ids)
+            processed_count += len(new_ids)
+        else:
+            if batch_size > 1:
+                logging.warning(f"Batch copy failed. Retrying with smaller batches.")
+                mid = len(batch) // 2
+                copy_batch(batch[:mid], batch_size // 2)
+                copy_batch(batch[mid:], batch_size // 2)
+            elif batch:
+                for element_id in batch:
+                    logging.warning(f"Failed to copy element {element_id.IntegerValue}")
+                    failed_ids.append(element_id)
+                processed_count += len(batch)
+            else:
+                logging.warning("Empty batch encountered")
+        
+        # Update progress bar description
+        pbar.set_description(f"Total: {total_elements}, Succeeded: {len(all_new_ids)}, Failed: {len(failed_ids)}")
+        pbar.update(processed_count - pbar.n)
+
+    # Create a tqdm progress bar outside the recursive function
+    with tqdm(total=total_elements, desc="Copying elements", ncols=100) as pbar:
+        for i in range(0, len(element_ids), initial_batch_size):
+            batch = element_ids[i:i+initial_batch_size]
+            copy_batch(batch, initial_batch_size)
+
+    logging.info(f"Successfully copied {len(all_new_ids)} elements")
+    if failed_ids:
+        logging.warning(f"Failed to copy {len(failed_ids)} elements: {', '.join(str(id.IntegerValue) for id in failed_ids[:5])}")
+    
+    return all_new_ids
+
+def batch_copy_elements(source_doc, element_ids, dest_doc, new_workset, initial_batch_size=10):
+    all_new_ids = []
+    failed_ids = []
+    total_elements = len(element_ids)
+    
+    processed_count = 0
+    start_time = time.time()
+
+    def update_progress():
+        elapsed_time = time.time() - start_time
+        progress = processed_count / total_elements
+        bar_length = 50
+        filled_length = int(bar_length * progress)
+        bar = '█' * filled_length + '-' * (bar_length - filled_length)
+        
+        sys.stdout.write(f'\rProgress: |{bar}| {processed_count}/{total_elements} '
+                         f'Succeeded: {len(all_new_ids)}, Failed: {len(failed_ids)} '
+                         f'Time: {elapsed_time:.2f}s')
+        sys.stdout.flush()
+
+    def copy_batch(batch, batch_size):
+        nonlocal processed_count
+        logging.info(f"Attempting to copy batch of {len(batch)} elements")
+        batch_list = List[ElementId](batch)
+        new_ids = copy_elements(source_doc, batch_list, dest_doc, new_workset)
+        if new_ids:
+            all_new_ids.extend(new_ids)
+            processed_count += len(new_ids)
+        else:
+            if batch_size > 1:
+                logging.warning(f"Batch copy failed. Retrying with smaller batches.")
+                mid = len(batch) // 2
+                copy_batch(batch[:mid], batch_size // 2)
+                copy_batch(batch[mid:], batch_size // 2)
+            elif batch:
+                for element_id in batch:
+                    logging.warning(f"Failed to copy element {element_id.IntegerValue}")
+                    failed_ids.append(element_id)
+                processed_count += len(batch)
+            else:
+                logging.warning("Empty batch encountered")
+        
+        update_progress()
+
+    for i in range(0, len(element_ids), initial_batch_size):
+        batch = element_ids[i:i+initial_batch_size]
+        copy_batch(batch, initial_batch_size)
+
+    sys.stdout.write('\n')  # Move to the next line after progress is complete
+    logging.info(f"Successfully copied {len(all_new_ids)} elements")
+    if failed_ids:
+        logging.warning(f"Failed to copy {len(failed_ids)} elements: {', '.join(str(id.IntegerValue) for id in failed_ids[:5])}")
+    
+    return all_new_ids
+
+def copy_system_with_dependencies(source_doc, dest_doc, system_type, new_workset):
+    try:
+        # Get element IDs by system type
+        element_ids = get_element_ids_by_system_type(source_doc, system_type)
+        
+        if not element_ids:
+            logging.warning(f"No elements found for System Type: {system_type}")
+            return 0
+
+        # Convert element_ids to a Python list
+        element_ids_list = list(element_ids)
+
+        # Copy the system elements
+        new_ids = batch_copy_elements(source_doc, element_ids_list, dest_doc, new_workset)
+        
+        if not new_ids:
+            logging.warning(f"No elements were copied for System Type: {system_type}")
+            return 0
+
+        # Update connections and dependencies
+        update_connections(dest_doc, dict(zip(element_ids_list, new_ids)))
         
         logging.info(f"Successfully copied and updated system: {system_type}")
-        return len(id_mapping)
+        return len(new_ids)
     except Exception as e:
         logging.error(f"Error copying system {system_type}: {str(e)}")
         logging.error(f"Error type: {type(e).__name__}")
         logging.error("Traceback:", exc_info=True)
         return 0
+
+def update_connections(dest_doc, id_mapping):
+    for old_id, new_id in id_mapping.items():
+        new_elem = dest_doc.GetElement(new_id)
+        if new_elem and hasattr(new_elem, "MEPModel") and new_elem.MEPModel:
+            connectors = new_elem.MEPModel.ConnectorManager.Connectors if new_elem.MEPModel.ConnectorManager else []
+            for connector in connectors:
+                if connector.IsConnected:
+                    ref_connectors = connector.AllRefs
+                    for ref in ref_connectors:
+                        if ref.Owner.Id in id_mapping:
+                            try:
+                                connector.ConnectTo(ref)
+                            except Exception as e:
+                                logging.warning(f"Failed to connect elements {new_id.IntegerValue} and {ref.Owner.Id.IntegerValue}: {str(e)}")
 
 def select_from_list(options, prompt):
     form = Form()
@@ -226,6 +363,9 @@ def select_multiple_from_list(options, prompt):
 
 def main():
     try:
+        logging.info("Starting main function")
+        print("Starting main function")
+
         links = get_all_links()
         link_names = sorted(links.keys())
         
@@ -244,7 +384,7 @@ def main():
             return
 
         for system_type in tqdm(selected_system_types, desc="Processing system types"):
-            logging.info(f"\nProcessing System Type: {system_type}")
+            logging.info(f"Processing System Type: {system_type}")
             
             workset_name = f"VDC - {system_type}"
             
@@ -264,15 +404,21 @@ def main():
             except Exception as e:
                 t.RollBack()
                 logging.error(f"Error processing {system_type}: {str(e)}")
+                print(f"Error processing {system_type}: {str(e)}, check log file for details.")
                 logging.error(f"Error type: {type(e).__name__}")
                 logging.error("Traceback:", exc_info=True)
                 logging.info("Transaction rolled back.")
 
-        logging.info("\nAll operations completed.")
+        logging.info("All operations completed.")
+        print("All operations completed.")
+        logging.shutdown()
     except Exception as e:
-        logging.error(f"\nAn error occurred: {str(e)}")
-        logging.error(f"Error type: {type(e).__name__}")
-        logging.error("Traceback:", exc_info=True)
+        print(f"An error occurred in main: {str(e)}")
+        print(f"Error type: {type(e).__name__}")
+        print("Traceback:")
+        traceback.print_exc()
+        logging.error(f"An error occurred in main: {str(e)}", exc_info=True)
+        logging.shutdown()
 
 if __name__ == '__main__':
     main()
