@@ -155,31 +155,6 @@ def filter_copyable_elements(linked_doc, element_ids):
     
     return copyable_ids
 
-def calculate_transformation_old(source_doc, dest_doc):
-    '''
-    Calculate the transformation to copy elements from a source document to a destination document.
-
-    Args:
-        source_doc (Document): The source Document object.
-        dest_doc (Document): The destination Document object.
-    Returns:
-        Transform: The transformation to apply to the elements.
-    '''
-    source_position = source_doc.ActiveProjectLocation.GetProjectPosition(XYZ.Zero)
-    dest_position = dest_doc.ActiveProjectLocation.GetProjectPosition(XYZ.Zero)
-    
-    source_point = XYZ(source_position.EastWest, source_position.NorthSouth, source_position.Elevation)
-    dest_point = XYZ(dest_position.EastWest, dest_position.NorthSouth, dest_position.Elevation)
-    
-    # Calculate the translation vector manually
-    translation = XYZ(
-        dest_point.X - source_point.X,
-        dest_point.Y - source_point.Y,
-        dest_point.Z - source_point.Z
-    )
-    
-    return Transform.CreateTranslation(translation)
-
 def calculate_transformation(source_doc, dest_doc):
     '''
     Calculate the transformation to copy elements from a source document to a destination document.
@@ -202,7 +177,7 @@ def calculate_transformation(source_doc, dest_doc):
 
     return total_transform
 
-def copy_elements_old(source_doc, element_ids, dest_doc, new_workset):
+def copy_elements(source_doc, element_ids, dest_doc, new_workset):
     '''
     Copy elements from a source document to a destination document.
     The elements will be placed in a new workset.
@@ -308,86 +283,6 @@ def batch_copy_elements(source_doc, element_ids, dest_doc, new_workset, initial_
     
     return all_new_ids
 
-def filter_copyable_elements(linked_doc, element_ids):
-    '''
-    Filter a list of ElementIds to only include elements that are copyable.
-
-    Args:
-        linked_doc (Document): The linked Document object.
-        element_ids (list): A list of ElementIds.
-    Returns:
-        list: A list of copyable ElementIds.
-    '''
-    copyable_ids = []
-    non_copyable_reasons = {}
-    for id in element_ids:
-        element = linked_doc.GetElement(id)
-        if element is None:
-            non_copyable_reasons[id] = "Element not found"
-        elif element.Category is None:
-            non_copyable_reasons[id] = "No category"
-        elif not element.Category.AllowsBoundParameters:
-            non_copyable_reasons[id] = "Category doesn't allow bound parameters"
-        else:
-            copyable_ids.append(id)
-    
-    print(f"Filtered {len(copyable_ids)} copyable elements out of {len(element_ids)} total elements")
-    if len(non_copyable_reasons) > 0:
-        print(f"Examples of non-copyable elements:")
-        for id, reason in list(non_copyable_reasons.items())[:5]:
-            print(f"  ElementId {id}: {reason}")
-    
-    return copyable_ids
-
-def copy_elements(source_doc, element_ids, dest_doc, new_workset):
-    '''
-    Copy elements from a source document to a destination document.
-    The elements will be placed in a new workset.
-
-    Args:
-        source_doc (Document): The source Document object.
-        element_ids (list): A list of ElementIds to copy.
-        dest_doc (Document): The destination Document object.
-        new_workset (Workset): The new Workset object to place the copied elements in.
-    Returns:
-        list: A list of new ElementIds in the destination document.
-    '''
-    if not element_ids:
-        print("No elements to copy.")
-        return []
-
-    print(f"Attempting to copy {len(element_ids)} elements")
-    
-    # Create a List[ElementId] manually
-    element_id_list = List[ElementId]()
-    for id in element_ids:
-        element_id_list.Add(id)
-    
-    # Calculate the transformation
-    transform = calculate_transformation(source_doc, dest_doc)
-    print(f"Calculated transformation: {transform}")
-
-    # Create CopyPasteOptions
-    options = CopyPasteOptions()
-
-    try:
-        new_ids = ElementTransformUtils.CopyElements(source_doc, element_id_list, dest_doc, transform, options)
-        print(f"Successfully copied {len(new_ids)} elements.")
-        
-        for new_id in new_ids:
-            elem = dest_doc.GetElement(new_id)
-            workset_param = elem.get_Parameter(BuiltInParameter.ELEM_PARTITION_PARAM)
-            workset_param.Set(new_workset.Id.IntegerValue)
-        
-        return new_ids
-    except Exception as e:
-        print(f"Error during CopyElements: {str(e)}")
-        print(f"Error type: {type(e).__name__}")
-        print("Traceback:")
-        import traceback
-        traceback.print_exc()
-        return []
-
 def select_from_list(options, prompt):
     form = Form()
     form.Text = prompt
@@ -446,7 +341,7 @@ def select_multiple_from_list(options, prompt):
     form.ShowDialog()
     return selected_items
 
-def main_old():
+def main():
     try:
         links = get_all_links()
         link_names = sorted(links.keys())
@@ -515,74 +410,6 @@ def main_old():
         print("Traceback:")
         import traceback
         traceback.print_exc()
-
-def main():
-    try:
-        links = get_all_links()
-        link_names = sorted(links.keys())
-        
-        selected_link_name = select_from_list(link_names, "Select a Revit Link")
-        if selected_link_name is None:
-            print("No link selected. Exiting.")
-            return
-
-        linked_doc = get_linked_document(links[selected_link_name])
-        
-        system_types = get_all_system_types(linked_doc)
-        
-        selected_system_types = select_multiple_from_list(system_types, "Select System Types")
-        if not selected_system_types:
-            print("No system types selected. Exiting.")
-            return
-        
-        for system_type in selected_system_types:
-            print(f"\nProcessing System Type: {system_type}")
-            
-            element_ids = get_element_ids_by_system_type(linked_doc, system_type)
-            
-            if not element_ids:
-                print(f"No elements found for System Type: {system_type}. Skipping.")
-                continue
-            
-            workset_name = f"VDC - {system_type}"
-            
-            t = Transaction(doc, f"Copy Elements for {system_type}")
-            t.Start()
-            
-            try:
-                new_workset = create_or_clean_workset(doc, workset_name)
-                copyable_ids = filter_copyable_elements(linked_doc, element_ids)
-                if not copyable_ids:
-                    print(f"No copyable elements found for System Type: {system_type}. Skipping.")
-                    t.RollBack()
-                    continue
-                
-                print(f"Attempting to copy {len(copyable_ids)} elements for System Type: {system_type}")
-                new_ids = copy_elements(linked_doc, copyable_ids, doc, new_workset)
-                
-                if new_ids:
-                    print(f"Successfully copied {len(new_ids)} elements to workset '{workset_name}'")
-                else:
-                    print(f"No elements were copied for System Type: {system_type}")
-                
-                t.Commit()
-            except Exception as e:
-                t.RollBack()
-                print(f"Error processing {system_type}: {str(e)}")
-                print(f"Error type: {type(e).__name__}")
-                print("Traceback:")
-                import traceback
-                traceback.print_exc()
-                print("Transaction rolled back.")
-
-        print("\nAll operations completed.")
-    except Exception as e:
-        print(f"\nAn error occurred: {str(e)}")
-        print(f"Error type: {type(e).__name__}")
-        print("Traceback:")
-        import traceback
-        traceback.print_exc()
-
 
 if __name__ == '__main__':
     main()
