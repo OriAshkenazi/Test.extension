@@ -97,7 +97,10 @@ def create_or_clean_workset(doc, name):
         
         elemIds = [elem.Id for elem in elements_in_workset]
         if elemIds:
-            doc.Delete(List[ElementId](elemIds))
+            delete_list = List[ElementId]()
+            for id in elemIds:
+                delete_list.Add(id)
+            doc.Delete(delete_list)
         
         new_workset = existing_workset
     else:
@@ -154,55 +157,6 @@ def copy_elements(source_doc, element_ids, dest_doc, new_workset):
     
     return new_ids
 
-def batch_copy_elements_old(source_doc, element_ids, dest_doc, new_workset, initial_batch_size=10):
-    all_new_ids = []
-    failed_ids = []
-    total_elements = len(element_ids)
-    
-    # Create a global counter
-    global processed_count
-    processed_count = 0
-    
-    def copy_batch(batch, batch_size):
-        global processed_count
-        logging.info(f"Attempting to copy batch of {len(batch)} elements")
-        batch_list = List[ElementId]()
-        for id in batch:
-            batch_list.Add(id)
-        new_ids = copy_elements(source_doc, batch_list, dest_doc, new_workset)
-        if new_ids:
-            all_new_ids.extend(new_ids)
-            processed_count += len(new_ids)
-        else:
-            if batch_size > 1:
-                logging.warning(f"Batch copy failed. Retrying with smaller batches.")
-                mid = len(batch) // 2
-                copy_batch(batch[:mid], batch_size // 2)
-                copy_batch(batch[mid:], batch_size // 2)
-            elif batch:
-                for element_id in batch:
-                    logging.warning(f"Failed to copy element {element_id.IntegerValue}")
-                    failed_ids.append(element_id)
-                processed_count += len(batch)
-            else:
-                logging.warning("Empty batch encountered")
-        
-        # Update progress bar description
-        pbar.set_description(f"Total: {total_elements}, Succeeded: {len(all_new_ids)}, Failed: {len(failed_ids)}")
-        pbar.update(processed_count - pbar.n)
-
-    # Create a tqdm progress bar outside the recursive function
-    with tqdm(total=total_elements, desc="Copying elements", ncols=100) as pbar:
-        for i in range(0, len(element_ids), initial_batch_size):
-            batch = element_ids[i:i+initial_batch_size]
-            copy_batch(batch, initial_batch_size)
-
-    logging.info(f"Successfully copied {len(all_new_ids)} elements")
-    if failed_ids:
-        logging.warning(f"Failed to copy {len(failed_ids)} elements: {', '.join(str(id.IntegerValue) for id in failed_ids[:5])}")
-    
-    return all_new_ids
-
 def batch_copy_elements(source_doc, element_ids, dest_doc, new_workset, initial_batch_size=10):
     all_new_ids = []
     failed_ids = []
@@ -218,15 +172,16 @@ def batch_copy_elements(source_doc, element_ids, dest_doc, new_workset, initial_
         filled_length = int(bar_length * progress)
         bar = '█' * filled_length + '-' * (bar_length - filled_length)
         
-        sys.stdout.write(f'\rProgress: |{bar}| {processed_count}/{total_elements} '
+        sys.stdout.write(f'Progress: |{bar}| {processed_count}/{total_elements} '
                          f'Succeeded: {len(all_new_ids)}, Failed: {len(failed_ids)} '
-                         f'Time: {elapsed_time:.2f}s')
-        sys.stdout.flush()
+                         f'Time: {elapsed_time:.2f}s\n')
 
     def copy_batch(batch, batch_size):
         nonlocal processed_count
         logging.info(f"Attempting to copy batch of {len(batch)} elements")
-        batch_list = List[ElementId](batch)
+        batch_list = List[ElementId]()
+        for id in batch:
+            batch_list.Add(id)
         new_ids = copy_elements(source_doc, batch_list, dest_doc, new_workset)
         if new_ids:
             all_new_ids.extend(new_ids)
