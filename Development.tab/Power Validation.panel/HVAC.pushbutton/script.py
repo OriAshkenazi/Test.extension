@@ -259,15 +259,23 @@ def calculate_nearest_distance(source_elements, target_elements):
     total_comparisons = len(source_elements) * len(target_elements)
     
     with tqdm(total=total_comparisons, desc="Calculating distances") as pbar:
-        for source, source_doc, local_source in source_elements:
+        for source_tuple in source_elements:
+            source, source_doc, local_source, source_transform = source_tuple
             source_point = source.Location.Point
+            # Transform source_point into host coordinate system
+            if source_transform is not None:
+                source_point = source_transform.OfPoint(source_point)
             min_distance = float('inf')
             nearest_target = None
             nearest_target_doc = None
             nearest_local_target = None
             
-            for target, target_doc, local_target in target_elements:
+            for target_tuple in target_elements:
+                target, target_doc, local_target, target_transform = target_tuple
                 target_point = target.Location.Point
+                # Transform target_point into host coordinate system
+                if target_transform is not None:
+                    target_point = target_transform.OfPoint(target_point)
                 distance = calculate_distance(source_point, target_point)
                 
                 if distance < min_distance:
@@ -290,9 +298,28 @@ def calculate_nearest_distance(source_elements, target_elements):
     
     return results
 
+def get_link_instance_transform(linked_doc, host_doc):
+    """
+    Get the transformation from a linked document to the host document.
+    """
+    if linked_doc.Equals(host_doc):
+        return Transform.Identity
+    link_instances = FilteredElementCollector(host_doc).OfClass(RevitLinkInstance)
+    for link_instance in link_instances:
+        if link_instance.GetLinkDocument() == linked_doc:
+            return link_instance.GetTotalTransform()
+    print(f"Could not find link instance for document {linked_doc.Title}")
+    return None
+
 def get_elements_by_category_and_description(category, search_strings, linked_docs, host_doc, workset_name=None):
     elements = []
     for linked_doc in linked_docs:
+        # Get the transformation from the linked document to the host document
+        transform = get_link_instance_transform(linked_doc, host_doc)
+        if transform is None:
+            print(f"Could not find link instance for document {linked_doc.Title}")
+            continue
+
         collector = FilteredElementCollector(linked_doc).OfCategory(category).WhereElementIsNotElementType()
         for element in collector:
             element_type = linked_doc.GetElement(element.GetTypeId())
@@ -304,28 +331,12 @@ def get_elements_by_category_and_description(category, search_strings, linked_do
                             # Try to get the local representation
                             local_element = None
                             try:
-                                # First, try to find a matching element in the specified workset
-                                if workset_name:
-                                    workset_table = host_doc.GetWorksetTable()
-                                    workset = next((ws for ws in workset_table.GetWorksets() if ws.Name == workset_name), None)
-                                    if workset:
-                                        local_collector = FilteredElementCollector(host_doc).OfCategory(category).WhereElementIsNotElementType().OnWorkset(workset.Id)
-                                        for local_elem in local_collector:
-                                            if local_elem.Name == element.Name and local_elem.GetTypeId().IntegerValue == element.GetTypeId().IntegerValue:
-                                                local_element = local_elem
-                                                break
-                                
-                                # If not found in the specific workset, try in all worksets
-                                if local_element is None:
-                                    local_collector = FilteredElementCollector(host_doc).OfCategory(category).WhereElementIsNotElementType()
-                                    for local_elem in local_collector:
-                                        if local_elem.Name == element.Name and local_elem.GetTypeId().IntegerValue == element.GetTypeId().IntegerValue:
-                                            local_element = local_elem
-                                            break
+                                # Code to find local_element if needed
+                                pass
                             except Exception as e:
                                 print(f"Error getting local element: {str(e)}")
                             
-                            elements.append((element, linked_doc, local_element))
+                            elements.append((element, linked_doc, local_element, transform))
                             break
     print(f"Found {len(elements)} elements of category {category} matching search strings in linked documents")
     return elements
@@ -512,26 +523,27 @@ def get_parameter_value(element, param_name):
     
 def main():
     clear_all_lru_caches()
-
+    
     folder_path = get_folder_path("Select a folder to save the Excel report")
     if not validate_folder_path(folder_path):
         return
-
-    linked_docs = get_linked_documents()
-    if not linked_docs:
-        TaskDialog.Show("Error", "No linked documents found.")
+    
+    # Include the host document in the list of documents to process
+    all_docs = [doc] + get_linked_documents()
+    if not all_docs:
+        TaskDialog.Show("Error", "No documents found.")
         return
 
     power_devices = get_elements_by_category_and_description(
         BuiltInCategory.OST_MechanicalEquipment,
         ["AES", "מעבים"],
-        linked_docs,
+        all_docs,
         doc  # Pass the host document
     )
     outlets = get_elements_by_category_and_description(
         BuiltInCategory.OST_ElectricalFixtures,
         ["Socket", "בית תקע"],
-        linked_docs,
+        all_docs,
         doc  # Pass the host document
     )
 
@@ -542,22 +554,22 @@ def main():
     output_path = os.path.join(folder_path, "Comparison_Report.xlsx")
     create_excel_report(results, output_path)
 
-    view_name = "VDC - HVAC ELEC verification"
+    # view_name = "VDC - HVAC ELEC verification"
     
-    # Check if the view already exists
-    existing_view = next((view for view in FilteredElementCollector(doc).OfClass(View3D) 
-                          if not view.IsTemplate and view.Name == view_name), None)
+    # # Check if the view already exists
+    # existing_view = next((view for view in FilteredElementCollector(doc).OfClass(View3D) 
+    #                       if not view.IsTemplate and view.Name == view_name), None)
     
-    is_new_view = existing_view is None
-    modified_view = create_or_modify_3d_view(doc, power_devices, outlets, view_name, is_new_view)
+    # is_new_view = existing_view is None
+    # modified_view = create_or_modify_3d_view(doc, power_devices, outlets, view_name, is_new_view)
     
-    if modified_view:
-        uidoc.ActiveView = modified_view
-        action = "created" if is_new_view else "modified"
-        TaskDialog.Show("Success", f"3D view '{view_name}' {action} successfully.")
-    else:
-        action = "create" if is_new_view else "modify"
-        TaskDialog.Show("Error", f"Failed to {action} 3D view '{view_name}'. Check the script output for details.")
+    # if modified_view:
+    #     uidoc.ActiveView = modified_view
+    #     action = "created" if is_new_view else "modified"
+    #     TaskDialog.Show("Success", f"3D view '{view_name}' {action} successfully.")
+    # else:
+    #     action = "create" if is_new_view else "modify"
+    #     TaskDialog.Show("Error", f"Failed to {action} 3D view '{view_name}'. Check the script output for details.")
 
     clear_all_lru_caches()
 
