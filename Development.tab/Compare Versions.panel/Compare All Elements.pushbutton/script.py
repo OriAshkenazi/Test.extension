@@ -192,7 +192,6 @@ class ElementMetricsCalculator:
         for metric, value in self.metrics.items():
             self.logs.append(f"{metric.capitalize()}: {value:.2f}")
 
-
 def tracked_lru_cache(*args, **kwargs):
     def decorator(func):
         cached_func = lru_cache(*args, **kwargs)(func)
@@ -392,134 +391,21 @@ def get_parameter_value(element, param_id):
                 return 0.0
     return 0.0
 
-def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str]]:
+def calculate_element_metrics(element, doc) -> Tuple[Dict[str, float], List[str], List[str]]:
     '''
-    Calculate the metrics for an element.
+    Calculate the metrics for an element using the ElementMetricsCalculator class.
 
     Args:
         element (Element): The element to calculate metrics for.
         doc (Document): The Revit document.
     Returns:
-        Tuple[Dict[str, float], List[str]]: A tuple containing:
+        Tuple[Dict[str, float], List[str], List[str]]: A tuple containing:
             - A dictionary of calculated metrics.
             - A list of errors encountered during calculation.
+            - A list of logs for tracking the processing steps.
     '''
-    metrics = {'length': 0.0, 'area': 0.0, 'volume': 0.0}
-    errors = [f"Element ID: {element.Id.IntegerValue}"]
-   
-    try:
-        category = element.Category
-        if category:
-            category_name = category.Name
-            errors.append(f"Category: {category_name}")
-            category_id = category.Id.IntegerValue
-        else:
-            errors.append("Category: None")
-            category_id = -1
-
-        # General Parameters
-        metrics['length'] = get_parameter_value(element, BuiltInParameter.INSTANCE_LENGTH_PARAM)
-        metrics['area'] = get_parameter_value(element, BuiltInParameter.HOST_AREA_COMPUTED)
-        metrics['volume'] = get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
-
-        # Specific handling based on category or element type
-        if isinstance(element, Wall):
-            location = element.Location
-            if isinstance(location, LocationCurve):
-                metrics['length'] = location.Curve.Length
-
-        elif isinstance(element, (Floor, Ceiling, RoofBase)):
-            pass  # Already handled by general parameters
-        
-        errors.append(f"Initial metrics - Length: {metrics['length']:.2f}, Area: {metrics['area']:.2f}, Volume: {metrics['volume']:.2f}")
-
-        if category_name == "Structural Foundations":
-            errors.append("Processing Structural Foundation")
-            # Get length (depth) of the foundation
-            metrics['length'] = get_parameter_value(element, BuiltInParameter.STRUCTURAL_FOUNDATION_DEPTH)
-            errors.append(f"Foundation depth: {metrics['length']:.2f}")
-            
-            # Try to get diameter for circular piles
-            diameter = get_parameter_value(element, 'Diameter')
-            
-            # If diameter is not found, try to get width for square piles
-            if diameter == 0:
-                width = get_parameter_value(element, 'Width')
-                depth = get_parameter_value(element, 'Depth')
-            else:
-                width = depth = diameter
-            
-            # Calculate cross-sectional area
-            if diameter > 0:
-                # Circular pile
-                metrics['area'] = math.pi * (diameter/2)**2
-            elif width > 0 and depth > 0:
-                # Rectangular or square pile
-                metrics['area'] = width * depth
-            else:
-                metrics['area'] = 0
-                errors.append("Could not determine pile cross-sectional area")
-            
-            # Calculate volume
-            if metrics['length'] > 0 and metrics['area'] > 0:
-                metrics['volume'] = metrics['area'] * metrics['length']
-            else:
-                # If we couldn't calculate it, try to get it directly from the element
-                metrics['volume'] = get_parameter_value(element, 'Volume')
-            
-            # If length is still 0, try to calculate it from geometry
-            if metrics['length'] == 0:
-                try:
-                    geo_elem = element.get_Geometry(Options())
-                    if geo_elem:
-                        bbox = geo_elem.GetBoundingBox()
-                        metrics['length'] = bbox.Max.Z - bbox.Min.Z
-                except Exception as e:
-                    errors.append(f"Error calculating foundation length: {str(e)}")
-            
-            # If volume is still 0 and we have length and area, calculate it
-            if metrics['volume'] == 0 and metrics['area'] > 0 and metrics['length'] > 0:
-                metrics['volume'] = metrics['area'] * metrics['length']
-
-            errors.append(f"Foundation metrics - Length (depth): {metrics['length']:.2f}, "
-                        f"Cross-sectional Area: {metrics['area']:.2f}, Volume: {metrics['volume']:.2f}")
-
-        elif category_id == int(BuiltInCategory.OST_Rooms):
-            metrics['area'] = get_parameter_value(element, BuiltInParameter.ROOM_AREA)
-            metrics['volume'] = get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
-
-        elif category_id == int(BuiltInCategory.OST_Stairs):
-            metrics['length'] = get_parameter_value(element, BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
-
-        elif category_id == int(BuiltInCategory.OST_Railings):
-            location = element.Location
-            if isinstance(location, LocationCurve):
-                metrics['length'] = location.Curve.Length
-
-        else:
-            bbox = element.get_BoundingBox(None)
-            if bbox:
-                metrics['length'] = max(bbox.Max.X - bbox.Min.X, bbox.Max.Y - bbox.Min.Y, bbox.Max.Z - bbox.Min.Z)
-
-        # Unit Conversion (from Revit internal units to desired units)
-        try:
-            metrics['length'] = UnitUtils.ConvertFromInternalUnits(metrics['length'], 
-                               ForgeTypeId.FromString("autodesk.spec.aec:meters-1.0.1"))
-            metrics['area'] = UnitUtils.ConvertFromInternalUnits(metrics['area'], 
-                              ForgeTypeId.FromString("autodesk.spec.aec:squareMeters-1.0.1"))
-            metrics['volume'] = UnitUtils.ConvertFromInternalUnits(metrics['volume'], 
-                               ForgeTypeId.FromString("autodesk.spec.aec:cubicMeters-1.0.1"))
-        except Exception as e:
-            errors.append(f"Unit conversion error: {str(e)}")
-
-        for metric, value in metrics.items():
-            errors.append(f"{metric.capitalize()}: {value:.2f}")
-
-    except Exception as e:
-        errors.append(f"Error calculating metrics: {str(e)}")
-        errors.append(traceback.format_exc())
-
-    return metrics, errors
+    calculator = ElementMetricsCalculator()
+    return calculator.calculate_metrics(element, doc)
 
 def get_type_metrics_old(doc):
     '''
