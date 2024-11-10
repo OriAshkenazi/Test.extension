@@ -44,6 +44,7 @@ class ElementMetricsCalculator:
             'volume': 0.0
         }
         self.errors = []
+        self.logs = []
         self.category_handlers = {
             BuiltInCategory.OST_StructuralFoundation: self.handle_structural_foundation,
             BuiltInCategory.OST_Walls: self.handle_wall,
@@ -55,14 +56,15 @@ class ElementMetricsCalculator:
             BuiltInCategory.OST_Railings: self.handle_railing
         }
 
-    def calculate_metrics(self, element: Element, doc: Document) -> Tuple[Dict[str, float], List[str]]:
+    def calculate_metrics(self, element: Element, doc: Document) -> Tuple[Dict[str, float], List[str], List[str]]:
         self.metrics = {key: 0.0 for key in self.metrics}
         self.errors = [f"Element ID: {element.Id.IntegerValue}"]
+        self.logs = []
 
         try:
             category = element.Category
             if category:
-                self.errors.append(f"Category: {category.Name}")
+                self.logs.append(f"Category: {category.Name}")
                 handler = self.category_handlers.get(category.Id.IntegerValue, self.handle_default)
             else:
                 self.errors.append("Category: None")
@@ -78,9 +80,10 @@ class ElementMetricsCalculator:
             import traceback
             self.errors.append(traceback.format_exc())
 
-        return self.metrics, self.errors
+        return self.metrics, self.errors, self.logs
 
     def handle_structural_foundation(self, element: Element, doc: Document):
+        self.logs.append("Handling structural foundation.")
         self.metrics['length'] = self.get_parameter_value(element, 'Foundation Depth')
         diameter = self.get_parameter_value(element, 'Diameter')
         
@@ -110,6 +113,7 @@ class ElementMetricsCalculator:
                 self.errors.append(f"Error calculating foundation length: {str(e)}")
 
     def handle_wall(self, element: Element, doc: Document):
+        self.logs.append("Handling wall.")
         location = element.Location
         if isinstance(location, LocationCurve):
             self.metrics['length'] = location.Curve.Length
@@ -117,27 +121,34 @@ class ElementMetricsCalculator:
         self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
 
     def handle_floor(self, element: Element, doc: Document):
+        self.logs.append("Handling floor.")
         self.handle_default(element, doc)
 
     def handle_ceiling(self, element: Element, doc: Document):
+        self.logs.append("Handling ceiling.")
         self.handle_default(element, doc)
 
     def handle_roof(self, element: Element, doc: Document):
+        self.logs.append("Handling roof.")
         self.handle_default(element, doc)
 
     def handle_room(self, element: Element, doc: Document):
+        self.logs.append("Handling room.")
         self.metrics['area'] = self.get_parameter_value(element, BuiltInParameter.ROOM_AREA)
         self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.ROOM_VOLUME)
 
     def handle_stairs(self, element: Element, doc: Document):
+        self.logs.append("Handling stairs.")
         self.metrics['length'] = self.get_parameter_value(element, BuiltInParameter.STAIRS_ACTUAL_RUN_LENGTH)
 
     def handle_railing(self, element: Element, doc: Document):
+        self.logs.append("Handling railing.")
         location = element.Location
         if isinstance(location, LocationCurve):
             self.metrics['length'] = location.Curve.Length
 
     def handle_default(self, element: Element, doc: Document):
+        self.logs.append("Handling default category.")
         self.metrics['length'] = self.get_parameter_value(element, BuiltInParameter.INSTANCE_LENGTH_PARAM)
         self.metrics['area'] = self.get_parameter_value(element, BuiltInParameter.HOST_AREA_COMPUTED)
         self.metrics['volume'] = self.get_parameter_value(element, BuiltInParameter.HOST_VOLUME_COMPUTED)
@@ -179,7 +190,7 @@ class ElementMetricsCalculator:
 
     def log_metrics(self):
         for metric, value in self.metrics.items():
-            self.errors.append(f"{metric.capitalize()}: {value:.2f}")
+            self.logs.append(f"{metric.capitalize()}: {value:.2f}")
 
 
 def tracked_lru_cache(*args, **kwargs):
