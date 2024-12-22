@@ -161,14 +161,14 @@ print(f"Total perimeter: {total_perimeter:.2f} cm")
 try:
     t = Transaction(doc, "Update Ceiling Perimeter Length")
     t.Start()
-    param = ceiling.LookupParameter("VDC אורך סינר")
+    param = ceiling.LookupParameter("VDC Skirting Length")
     if param:
         param.Set(total_perimeter / 30.48)
         t.Commit()
         print(f"\nParameter updated successfully")
     else:
         t.RollBack()
-        print("Error: Parameter 'VDC אורך סינר' not found.")
+        print("Error: Parameter 'VDC Skirting Length' not found.")
 except Exception as e:
     if t.HasStarted():
         t.RollBack()
