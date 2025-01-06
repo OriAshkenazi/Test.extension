@@ -23,6 +23,15 @@ from shapely.validation import make_valid
 from typing import Optional, Tuple
 import logging
 import traceback
+import clr
+
+clr.AddReference('RevitAPI')
+clr.AddReference('System')
+from Autodesk.Revit.DB import *
+from Autodesk.Revit.Exceptions import InvalidOperationException
+
+# Get the current document
+doc = __revit__.ActiveUIDocument.Document
 
 # ========================
 # CONSTANTS AND GLOBALS
