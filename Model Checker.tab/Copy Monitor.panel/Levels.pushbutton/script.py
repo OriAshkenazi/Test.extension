@@ -68,82 +68,74 @@ def select_origin_link(links):
         return links[combo.SelectedIndex]
     return None
 
-def get_grid_parameters(grid):
-    """Extract relevant parameters from a grid."""
+def get_level_parameters(level):
+    """Extract relevant parameters from a level."""
     params = {
-        'element': grid,  # Store the element itself
-        'name': grid.Name,
-        'start_point': grid.Curve.GetEndPoint(0),
-        'end_point': grid.Curve.GetEndPoint(1),
-        'curve_type': type(grid.Curve).__name__
+        'element': level,  # Store the element itself
+        'name': level.Name,
+        'elevation': level.Elevation
     }
     
     # Get all parameters
-    for param in grid.Parameters:
+    for param in level.Parameters:
         if param.HasValue:
             params[param.Definition.Name] = param.AsString()
     
     return params
 
-def collect_grids(doc_or_link):
-    """Collect all grids from specified document."""
+def collect_levels(doc_or_link):
+    """Collect all levels from specified document."""
     if isinstance(doc_or_link, RevitLinkInstance):
         doc_to_use = doc_or_link.GetLinkDocument()
     else:
         doc_to_use = doc_or_link
     
-    collector = FilteredElementCollector(doc_to_use).OfClass(Grid)
-    grids = {}
-    for grid in collector:
-        params = get_grid_parameters(grid)
-        grids[params['name']] = params  # Store parameters directly
+    collector = FilteredElementCollector(doc_to_use).OfClass(Level)
+    levels = {}
+    for level in collector:
+        params = get_level_parameters(level)
+        levels[params['name']] = params  # Store parameters directly
     
-    return grids
+    return levels
 
-def compare_points(p1, p2):
-    """Compare two points for exact equality."""
-    return (p1.X == p2.X and 
-            p1.Y == p2.Y and 
-            p1.Z == p2.Z)
-
-def compare_grids(current_grid, origin_grid):
-    """Compare only grid geometry between models."""
+def compare_levels(current_level, origin_level):
+    """Compare level elevations between models."""
     discrepancies = []
     
-    # Compare start and end points
-    if not compare_points(current_grid['start_point'], origin_grid['start_point']):
-        discrepancies.append("Start point mismatch")
-    if not compare_points(current_grid['end_point'], origin_grid['end_point']):
-        discrepancies.append("End point mismatch")
+    # Compare elevations with a small tolerance (1mm = 0.001m)
+    tolerance = 0.001
+    if abs(current_level['elevation'] - origin_level['elevation']) > tolerance:
+        discrepancies.append("Elevation mismatch: Current = %.3fm, Origin = %.3fm" % (
+            current_level['elevation'],
+            origin_level['elevation']
+        ))
         
     return discrepancies
 
-def highlight_grid(grid_data, color=None):
-    """Apply graphic override to grid in current view."""
+def highlight_level(level_data):
+    """Apply graphic override to level in current view."""
     try:
-        if color is None:
-            color = Color(255, 0, 0)  # Red
+        # Create color using Revit's Color structure
+        color = Color(255, 0, 0)  # Red
         
         override = OverrideGraphicSettings()
         override.SetProjectionLineColor(color)
         override.SetProjectionLineWeight(6)
         
         current_view = doc.ActiveView
+        level_element = level_data['element']
         
-        # Access the element directly as it's now at the top level
-        grid_element = grid_data['element']
-        
-        t = Transaction(doc, "Highlight problematic grid")
+        t = Transaction(doc, "Highlight problematic level")
         t.Start()
         try:
-            current_view.SetElementOverrides(grid_element.Id, override)
+            current_view.SetElementOverrides(level_element.Id, override)
             t.Commit()
         except Exception as e:
             t.RollBack()
             raise
     except Exception as e:
         print("Error type:", type(e))
-        print("Grid data keys:", grid_data.keys())
+        print("Level data keys:", level_data.keys())
         raise
 
 def main():
@@ -159,49 +151,48 @@ def main():
         TaskDialog.Show("Info", "No link selected. Operation cancelled.")
         return
     
-    # Collect grids from both models
-    origin_grids = collect_grids(origin_link)
-    current_grids = collect_grids(doc)
+    # Collect levels from both models
+    origin_levels = collect_levels(origin_link)
+    current_levels = collect_levels(doc)
     
-    if not origin_grids or not current_grids:
-        TaskDialog.Show("Error", "No grids found in one or both models.")
+    if not origin_levels or not current_levels:
+        TaskDialog.Show("Error", "No levels found in one or both models.")
         return
     
-    # Compare grids and highlight problems
-    problematic_grids = []
+    # Compare levels and highlight problems
+    problematic_levels = []
     message_lines = []
     
-    for name, current_grid in current_grids.items():
-        if name not in origin_grids:
-            message_lines.append("Grid %s not found in origin model" % name)
-            problematic_grids.append((current_grid, ["Missing in origin model"]))
+    for name, current_level in current_levels.items():
+        if name not in origin_levels:
+            message_lines.append("Level %s not found in origin model" % name)
+            problematic_levels.append((current_level, ["Missing in origin model"]))
             continue
         
-        discrepancies = compare_grids(current_grid, origin_grids[name])
+        discrepancies = compare_levels(current_level, origin_levels[name])
         if discrepancies:
-            message_lines.append("Discrepancies found in grid %s:" % name)
+            message_lines.append("Discrepancies found in level %s:" % name)
             for disc in discrepancies:
                 message_lines.append("  - %s" % disc)
-            problematic_grids.append((current_grid, discrepancies))
+            problematic_levels.append((current_level, discrepancies))
     
     # Check for levels in origin model that don't exist in current model
-    for name in origin_grids:
-        if name not in current_grids:
-            message_lines.append("Grid %s from origin model missing in current model" % name)
-
-
-    # Highlight problematic grids
-    if problematic_grids:
-        for grid, _ in problematic_grids:
-            highlight_grid(grid)
+    for name in origin_levels:
+        if name not in current_levels:
+            message_lines.append("Level %s from origin model missing in current model" % name)
+    
+    # Highlight problematic levels
+    if problematic_levels:
+        for level, _ in problematic_levels:
+            highlight_level(level)
         
-        summary = "Found %d problematic grids.\n\n%s" % (
-            len(problematic_grids),
+        summary = "Found %d problematic levels.\n\n%s" % (
+            len(problematic_levels),
             "\n".join(message_lines)
         )
         TaskDialog.Show("Results", summary)
     else:
-        TaskDialog.Show("Results", "No problems found. All grids match the origin model.")
+        TaskDialog.Show("Results", "No problems found. All levels match the origin model.")
 
 if __name__ == '__main__':
     main()
