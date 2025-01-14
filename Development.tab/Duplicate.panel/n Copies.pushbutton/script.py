@@ -4,7 +4,9 @@ from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 from System.Collections.Generic import List
 import clr
 clr.AddReference('System.Windows.Forms')
+clr.AddReference('System.Drawing')
 from System.Windows.Forms import MessageBox, Form, Label, TextBox, Button, DialogResult
+from System.Drawing import Point
 
 doc = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
@@ -17,23 +19,23 @@ def get_user_input(prompt, title, default="2"):
     """Create a simple input dialog using Windows Forms"""
     form = Form()
     form.Text = title
-    form.Width = 300
+    form.Width = 360
     form.Height = 150
     
     label = Label()
     label.Text = prompt
-    label.Location = System.Drawing.Point(10, 10)
-    label.Width = 280
+    label.Location = Point(10, 10)
+    label.Width = 350
     
     textbox = TextBox()
     textbox.Text = default
-    textbox.Location = System.Drawing.Point(10, 40)
+    textbox.Location = Point(10, 40)
     textbox.Width = 260
     
     button = Button()
     button.Text = "OK"
     button.DialogResult = DialogResult.OK
-    button.Location = System.Drawing.Point(100, 70)
+    button.Location = Point(100, 70)
     
     form.Controls.Add(label)
     form.Controls.Add(textbox)
@@ -87,10 +89,10 @@ def main():
             show_message(f"{num_copies} total elements created successfully.")
         except Exception as e:
             t.RollBack()
-            show_message(f"Failed to create copies: {str(e)}")
+            print(f"Failed to create copies: {str(e)}")
 
     except Exception as e:
-        show_message(f"An error occurred: {str(e)}")
+        print(f"An error occurred: {str(e)}")
 
 if __name__ == '__main__':
     main()
