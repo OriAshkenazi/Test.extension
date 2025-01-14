@@ -2,10 +2,47 @@
 from Autodesk.Revit.DB import *
 from Autodesk.Revit.UI.Selection import ObjectType, ISelectionFilter
 from System.Collections.Generic import List
-from pyrevit import forms
+import clr
+clr.AddReference('System.Windows.Forms')
+from System.Windows.Forms import MessageBox, Form, Label, TextBox, Button, DialogResult
 
 doc = __revit__.ActiveUIDocument.Document
 uidoc = __revit__.ActiveUIDocument
+
+def show_message(message, title="Info"):
+    """Display a message box"""
+    MessageBox.Show(message, title)
+
+def get_user_input(prompt, title, default="2"):
+    """Create a simple input dialog using Windows Forms"""
+    form = Form()
+    form.Text = title
+    form.Width = 300
+    form.Height = 150
+    
+    label = Label()
+    label.Text = prompt
+    label.Location = System.Drawing.Point(10, 10)
+    label.Width = 280
+    
+    textbox = TextBox()
+    textbox.Text = default
+    textbox.Location = System.Drawing.Point(10, 40)
+    textbox.Width = 260
+    
+    button = Button()
+    button.Text = "OK"
+    button.DialogResult = DialogResult.OK
+    button.Location = System.Drawing.Point(100, 70)
+    
+    form.Controls.Add(label)
+    form.Controls.Add(textbox)
+    form.Controls.Add(button)
+    form.AcceptButton = button
+    
+    if form.ShowDialog() == DialogResult.OK:
+        return textbox.Text
+    return None
 
 def main():
     """
@@ -18,29 +55,25 @@ def main():
         try:
             ref_picked_obj = selection.PickObject(ObjectType.Element, "Select an element to duplicate")
         except:
-            forms.alert("Selection cancelled by user.", exitscript=True)
+            show_message("Selection cancelled by user.")
             return
 
         picked_element = doc.GetElement(ref_picked_obj.ElementId)
         if not picked_element:
-            forms.alert("Invalid element selected.", exitscript=True)
+            show_message("Invalid element selected.")
             return
 
         # Ask for number of copies
-        try:
-            num_copies = forms.ask_for_string(
-                prompt="Enter the total number of elements (including the original):",
-                title="Number of Copies",
-                default="2"
-            )
-            if not num_copies or not num_copies.isdigit() or int(num_copies) <= 1:
-                forms.alert("Please enter a valid number greater than 1.", exitscript=True)
-                return
-            
-            num_copies = int(num_copies)
-        except:
-            forms.alert("Operation cancelled by user.", exitscript=True)
+        num_copies = get_user_input(
+            "Enter the total number of elements (including the original):",
+            "Number of Copies"
+        )
+        
+        if not num_copies or not num_copies.isdigit() or int(num_copies) <= 1:
+            show_message("Please enter a valid number greater than 1.")
             return
+        
+        num_copies = int(num_copies)
 
         # Start transaction
         t = Transaction(doc, "Duplicate Selected Element")
@@ -51,13 +84,13 @@ def main():
             for _ in range(num_copies - 1):
                 ElementTransformUtils.CopyElement(doc, picked_element.Id, XYZ(0, 0, 0))
             t.Commit()
-            forms.alert(f"{num_copies} total elements created successfully.", exitscript=False)
+            show_message(f"{num_copies} total elements created successfully.")
         except Exception as e:
             t.RollBack()
-            forms.alert(f"Failed to create copies: {str(e)}", exitscript=True)
+            show_message(f"Failed to create copies: {str(e)}")
 
     except Exception as e:
-        forms.alert(f"An error occurred: {str(e)}", exitscript=True)
+        show_message(f"An error occurred: {str(e)}")
 
 if __name__ == '__main__':
     main()
