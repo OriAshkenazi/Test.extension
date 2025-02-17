@@ -1,125 +1,266 @@
-# -*- coding: utf-8 -*-
-"""
-pyRevit IronPython 2.7 script:
-Exports all element TYPES in the Revit model to a CSV with columns:
-A: Category
-B: Family
-C: Type Name
-D: Count of Instances
-E..: Type Parameters
-
-Usage:
- 1) Click this button to run.
- 2) Choose a folder to save the CSV.
- 3) Open the CSV in Excel.
-
-Author: ChatGPT, for Revit 2019 + IronPython 2.7
-"""
-
+import clr
+clr.AddReference('RevitAPI')
+clr.AddReference('RevitAPIUI')
 import csv
 import sys
 import os
+from System.Text import Encoding
+import codecs
+import traceback
 
 from pyrevit import revit, forms
-from Autodesk.Revit.DB import (
-    FilteredElementCollector,
-    StorageType,
-    ElementId
-)
+from Autodesk.Revit.DB import *
 
 doc = revit.doc
 
 def get_param_value(param):
-    """Safely retrieve parameter values as strings for CSV export."""
+    """Get parameter value as string"""
     if not param or not param.HasValue:
         return ""
-    st = param.StorageType
-    if st == StorageType.Double:
-        return str(param.AsDouble())
-    elif st == StorageType.Integer:
-        return str(param.AsInteger())
-    elif st == StorageType.ElementId:
-        eid = param.AsElementId()
-        if eid != ElementId.InvalidElementId:
-            linked_elem = doc.GetElement(eid)
-            if linked_elem:
-                return linked_elem.Name
-        return ""
-    elif st == StorageType.String:
-        return param.AsString() or ""
+    try:
+        st = param.StorageType
+        if st == StorageType.Double:
+            return str(param.AsDouble())
+        elif st == StorageType.Integer:
+            return str(param.AsInteger())
+        elif st == StorageType.String:
+            return param.AsString() or ""
+        elif st == StorageType.ElementId:
+            eid = param.AsElementId()
+            if eid and eid != ElementId.InvalidElementId:
+                linked_elem = doc.GetElement(eid)
+                if linked_elem:
+                    return linked_elem.Name or str(eid.IntegerValue)
+            return str(eid.IntegerValue) if eid else ""
+    except Exception as e:
+        print("Error getting parameter value: {}".format(str(e)))
     return ""
 
-# 1. Collect all types and all instances in the model
-all_types = FilteredElementCollector(doc).WhereElementIsElementType().ToElements()
-all_instances = FilteredElementCollector(doc).WhereElementIsNotElementType().ToElements()
-
-# 2. Build a map: TypeId -> count of instances
-instance_count_by_type_id = {}
-for inst in all_instances:
-    t_id = inst.GetTypeId()
-    if t_id not in instance_count_by_type_id:
-        instance_count_by_type_id[t_id] = 0
-    instance_count_by_type_id[t_id] += 1
-
-# 3. Gather parameter data. We'll keep track of all param names for columns.
-all_param_names = set()
-all_type_data = []  # (Category, Family, Type Name, Count, {paramName -> paramValue})
-
-for t in all_types:
-    cat = t.Category
-    if not cat:
-        # skip items with no valid category
-        continue
-    cat_name = cat.Name
-    # Some element types are FamilySymbols; we'll try to get FamilyName
-    fam_name = ""
-    try:
-        fam_name = t.FamilyName
-    except:
-        pass
-
-    type_name = t.Name
-    type_id = t.Id
-
-    # Count of instances
-    count_instances = instance_count_by_type_id.get(type_id, 0)
-
-    # Gather the type's parameters
-    param_map = {}
-    for p in t.GetOrderedParameters():
-        p_name = p.Definition.Name
-        p_val = get_param_value(p)
-        param_map[p_name] = p_val
-        all_param_names.add(p_name)
-
-    all_type_data.append((cat_name, fam_name, type_name, count_instances, param_map))
-
-# Sort the parameter names for consistent columns
-param_name_list = sorted(list(all_param_names))
-
-# Columns:
-# A = Category, B = Family, C = Type Name, D = Count, E.. = parameters
-header = ["Category", "Family", "Type", "Count"] + param_name_list
-
-# 4. Prompt user for a folder to save the file
-save_folder = forms.pick_folder()
-if not save_folder:
-    sys.exit()  # user canceled
-
-csv_path = os.path.join(save_folder, "Export_Types_and_Parameters.csv")
-
-# 5. Write the CSV
-with open(csv_path, 'wb') as f:
-    writer = csv.writer(f)
-    writer.writerow(header)
+def get_all_parameters(element):
+    """Get all parameters from an element"""
+    params = []
     
-    for (cat_name, fam_name, type_name, count_instances, param_map) in all_type_data:
-        row = [cat_name, fam_name, type_name, count_instances]
-        for pname in param_name_list:
-            row.append(param_map.get(pname, ""))
-        writer.writerow(row)
+    # Get standard parameters
+    try:
+        for p in element.Parameters:
+            if p and p.HasValue and p.Definition:
+                param_name = p.Definition.Name
+                param_value = get_param_value(p)
+                if param_value:
+                    params.append((param_name, param_value))
+    except Exception as e:
+        print("Error getting standard parameters: {}".format(str(e)))
 
-forms.alert(
-    "Export Complete!\nSaved: {}".format(os.path.basename(csv_path)),
-    exitscript=True
-)
+    # Get built-in parameters by category
+    try:
+        # Common parameters
+        common_params = [
+            BuiltInParameter.ALL_MODEL_TYPE_NAME,
+            BuiltInParameter.ALL_MODEL_TYPE_MARK,
+            BuiltInParameter.ALL_MODEL_DESCRIPTION,
+            BuiltInParameter.ALL_MODEL_MANUFACTURER,
+            BuiltInParameter.ALL_MODEL_MODEL,
+            BuiltInParameter.ALL_MODEL_URL,
+            BuiltInParameter.ALL_MODEL_COST,
+            BuiltInParameter.SYMBOL_NAME_PARAM,
+            BuiltInParameter.SYMBOL_FAMILY_NAME_PARAM,
+            BuiltInParameter.ALL_MODEL_INSTANCE_COMMENTS,
+            BuiltInParameter.ALL_MODEL_TYPE_COMMENTS
+        ]
+        
+        # Dimensional parameters
+        dimension_params = [
+            BuiltInParameter.SYMBOL_HEIGHT_PARAM,
+            BuiltInParameter.SYMBOL_WIDTH_PARAM,
+            BuiltInParameter.SYMBOL_DEPTH_PARAM,
+            BuiltInParameter.CASEWORK_HEIGHT,
+            BuiltInParameter.CASEWORK_WIDTH,
+            BuiltInParameter.CASEWORK_DEPTH
+        ]
+        
+        # Material parameters
+        material_params = [
+            BuiltInParameter.ALL_MODEL_MATERIAL_NAME,
+            BuiltInParameter.ALL_MODEL_MATERIAL_ID_PARAM,
+            BuiltInParameter.MATERIAL_ID_PARAM,
+            BuiltInParameter.MATERIAL_ASSET_PARAM_NAME
+        ]
+        
+        # Family parameters
+        family_params = [
+            BuiltInParameter.FAMILY_LEVEL_PARAM,
+            BuiltInParameter.FAMILY_BASE_LEVEL_PARAM,
+            BuiltInParameter.FAMILY_TOP_LEVEL_PARAM,
+            BuiltInParameter.FAMILY_NAME_PARAM,
+            BuiltInParameter.FAMILY_WORK_PLANE_PARAM
+        ]
+        
+        # Component parameters
+        component_params = [
+            BuiltInParameter.COMPONENT_DETAILS,
+            BuiltInParameter.COMPONENT_CLASSIFICATION_PARAM,
+            BuiltInParameter.COMPONENT_CODE,
+            BuiltInParameter.COMPONENT_ID
+        ]
+
+        # Combine all parameter groups
+        all_builtin_params = (
+            common_params + 
+            dimension_params + 
+            material_params + 
+            family_params + 
+            component_params
+        )
+        
+        for bip in all_builtin_params:
+            try:
+                param = element.get_Parameter(bip)
+                if param and param.HasValue:
+                    param_name = param.Definition.Name
+                    param_value = get_param_value(param)
+                    if param_value:
+                        params.append((param_name, param_value))
+            except:
+                continue
+    except Exception as e:
+        print("Error getting built-in parameters: {}".format(str(e)))
+        
+    return params
+
+try:
+    print("Script starting...")
+    
+    # Get all elements by category
+    print("\nCollecting categories...")
+    categories = doc.Settings.Categories
+    print("Found {} categories".format(len(list(categories))))
+    
+    all_type_data = []
+    processed_categories = 0
+    
+    for cat in categories:
+        try:
+            if not cat.AllowsBoundParameters:
+                continue
+                
+            processed_categories += 1
+            print("\nProcessing category {}: {}".format(processed_categories, cat.Name))
+            
+            collector = FilteredElementCollector(doc).OfCategoryId(cat.Id).WhereElementIsElementType()
+            types = list(collector.ToElements())
+            
+            if not types:
+                continue
+                
+            print("Found {} types in {}".format(len(types), cat.Name))
+            
+            # Get instance counts for this category
+            instance_collector = FilteredElementCollector(doc).OfCategoryId(cat.Id).WhereElementIsNotElementType()
+            instances = list(instance_collector.ToElements())
+            print("Found {} instances in {}".format(len(instances), cat.Name))
+            
+            type_counts = {}
+            for inst in instances:
+                try:
+                    type_id = inst.GetTypeId()
+                    if type_id != ElementId.InvalidElementId:
+                        type_counts[type_id] = type_counts.get(type_id, 0) + 1
+                except Exception as e:
+                    print("Error counting instance: {}".format(str(e)))
+                    continue
+            
+            # Process types
+            print("\n" + "="*50)
+            print("Processing Types")
+            print("="*50)
+
+            for t in types:
+                try:
+                    type_id = t.Id
+                    count = type_counts.get(type_id, 0)
+                    
+                    # Get names
+                    type_name = t.Name
+                    try:
+                        fam_name = t.FamilyName
+                    except:
+                        fam_name = cat.Name
+                        
+                    if not type_name:
+                        continue
+                        
+                    # Get parameters
+                    params = get_all_parameters(t)
+                    
+                    if params:
+                        all_type_data.append((cat.Name, fam_name, type_name, count, params))
+                        print("\nType: {}".format(type_name))
+                        print("Family: {}".format(fam_name))
+                        print("Category: {}".format(cat.Name))
+                        print("Instance Count: {}".format(count))
+                        print("Parameters: {}".format(len(params)))
+                        
+                except Exception as e:
+                    print("Error processing type: {}".format(str(e)))
+                    continue
+                    
+        except Exception as e:
+            print("Error processing category {}: {}".format(cat.Name, str(e)))
+            print(traceback.format_exc())
+            continue
+
+    print("\nProcessed {} categories".format(processed_categories))
+    print("Found {} types with parameters".format(len(all_type_data)))
+
+    if not all_type_data:
+        forms.alert("No types found with parameters", exitscript=True)
+        sys.exit()
+
+    # Get save location
+    save_folder = forms.pick_folder()
+    if not save_folder:
+        sys.exit()
+
+    # Get all parameter names
+    param_names = set()
+    for _, _, _, _, params in all_type_data:
+        param_names.update(name for name, _ in params)
+    param_names = sorted(param_names)
+
+    print("\nFound {} unique parameters".format(len(param_names)))
+    
+    # Write CSV
+    csv_path = os.path.join(save_folder, "Export_Types_and_Parameters.csv")
+    print("\nWriting to {}".format(csv_path))
+    
+    with codecs.open(csv_path, 'wb', encoding='utf-8-sig') as f:
+        writer = csv.writer(f)
+        
+        # Write header
+        header = ['Category', 'Family', 'Type', 'Instance Count'] + list(param_names)
+        writer.writerow([unicode(x) for x in header])
+        
+        # Write data
+        rows_written = 0
+        for cat_name, fam_name, type_name, count, params in all_type_data:
+            param_dict = dict(params)
+            row = [cat_name, fam_name, type_name, count]
+            row.extend(param_dict.get(param_name, "") for param_name in param_names)
+            writer.writerow([unicode(x) for x in row])
+            rows_written += 1
+            
+        print("Wrote {} rows".format(rows_written))
+
+    forms.alert(
+        "Export Complete!\n" +
+        "Processed {} categories\n".format(processed_categories) +
+        "Found {} types\n".format(len(all_type_data)) +
+        "Wrote {} rows\n".format(rows_written) +
+        "Saved to: {}".format(os.path.basename(csv_path))
+    )
+    
+except Exception as e:
+    print("Error in main script:")
+    print(str(e))
+    print(traceback.format_exc())
+    forms.alert("An error occurred: {}".format(str(e)), exitscript=True)
