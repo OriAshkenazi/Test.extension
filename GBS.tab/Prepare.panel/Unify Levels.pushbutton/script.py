@@ -39,6 +39,33 @@ TEST_MODE = True   # Set to True to only process a limited number of items
 TEST_ITEM_COUNT = 10  # Number of items to process in test mode
 OUTPUT_TO_EXCEL = True  # Set to True to export results to Excel
 
+# Define Revit built-in parameter names for level parameters
+LEVEL_PARAM_NAMES = {
+    "LEVEL_PARAM": BuiltInParameter.LEVEL_PARAM,  # "Level" parameter
+    "SCHEDULE_LEVEL_PARAM": BuiltInParameter.SCHEDULE_LEVEL_PARAM,  # "Reference Level" parameter  
+    "ASSOCIATED_LEVEL_PARAM": BuiltInParameter.ASSOCIATED_LEVEL_PARAM,  # "Associated Level" parameter
+    "FAMILY_LEVEL_PARAM": BuiltInParameter.FAMILY_LEVEL_PARAM,  # "Base Level" parameter
+    "INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM": BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM,  # "Base Constraint" parameter
+}
+
+# Pre-defined level parameters (static data from the table headers)
+LEVEL_PARAMETERS = [
+    "Level ElementId Instance Constraints",
+    "Reference Level ElementId Instance Constraints",
+    "Associated Level ElementId Instance Constraints", 
+    "Base Level ElementId Instance Constraints", 
+    "Base Constraint ElementId Instance Constraints"
+]
+
+# Mapping between the table headers and Revit built-in parameters
+PARAM_MAPPING = {
+    "Level ElementId Instance Constraints": LEVEL_PARAM_NAMES["LEVEL_PARAM"],
+    "Reference Level ElementId Instance Constraints": LEVEL_PARAM_NAMES["SCHEDULE_LEVEL_PARAM"],
+    "Associated Level ElementId Instance Constraints": LEVEL_PARAM_NAMES["ASSOCIATED_LEVEL_PARAM"],
+    "Base Level ElementId Instance Constraints": LEVEL_PARAM_NAMES["FAMILY_LEVEL_PARAM"],
+    "Base Constraint ElementId Instance Constraints": LEVEL_PARAM_NAMES["INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM"]
+}
+
 # Try to import Excel libraries for IronPython
 try:
     # For IronPython
@@ -200,26 +227,92 @@ def get_level_from_z_coordinate(z_coord, levels):
             z_coord, levels_sorted[-1].Name))
         return levels_sorted[-1]  # Last level
 
-def get_element_levels(element, level_param_names, all_levels):
-    """Gets all level information for an element based on its parameters."""
+def get_element_levels(element, category_info, level_param_names, all_levels):
+    """Gets all level information for an element based on its parameters and category configuration."""
     element_levels = []
     level_params_found = []
     
     element_id = element.Id.IntegerValue
     debug_print("Processing element ID: {0}".format(element_id))
     
-    # Check all potential level parameters
-    for param_name in level_param_names:
-        param = element.LookupParameter(param_name)
-        if param and param.HasValue and param.StorageType == StorageType.ElementId:
-            level_id = param.AsElementId()
-            if level_id != ElementId.InvalidElementId:
-                level = doc.GetElement(level_id)
-                if level and isinstance(level, Level):
-                    element_levels.append(level)
-                    level_params_found.append(param_name)
-                    debug_print("Element {0} has level parameter {1} with value {2}".format(
-                        element_id, param_name, level.Name))
+    # Check if category has level parameters defined
+    if category_info["has_level"]:
+        debug_print("Category has level parameters defined in the configuration")
+        
+        # Get the active level parameters for this category
+        active_params = [param for param in level_param_names if category_info["level_params"].get(param, False)]
+        debug_print("Active level parameters for this category: {0}".format(active_params))
+        
+        # Check the defined level parameters for this category
+        for param_name in active_params:
+            # Try first with LookupParameter using the string name
+            param = element.LookupParameter(param_name)
+            
+            # If that fails, try with the built-in parameter if it's in our mapping
+            if not param and param_name in PARAM_MAPPING:
+                try:
+                    param = element.get_Parameter(PARAM_MAPPING[param_name])
+                    debug_print("Using built-in parameter for {0}".format(param_name))
+                except Exception as e:
+                    debug_print("Error getting built-in parameter: {0}".format(str(e)))
+                    param = None
+            
+            if param and param.HasValue and param.StorageType == StorageType.ElementId:
+                level_id = param.AsElementId()
+                if level_id != ElementId.InvalidElementId:
+                    level = doc.GetElement(level_id)
+                    if level and isinstance(level, Level):
+                        element_levels.append(level)
+                        level_params_found.append(param_name)
+                        debug_print("Element {0} has level parameter {1} with value {2}".format(
+                            element_id, param_name, level.Name))
+    else:
+        debug_print("Category does not have predefined level parameters, checking all possible parameters")
+        
+        # Try both string parameter names and built-in parameters
+        for param_name in LEVEL_PARAMETERS:
+            # Try with string parameter name
+            param = element.LookupParameter(param_name)
+            
+            # If that fails, try with built-in parameter
+            if not param and param_name in PARAM_MAPPING:
+                try:
+                    param = element.get_Parameter(PARAM_MAPPING[param_name])
+                except:
+                    param = None
+            
+            if param and param.HasValue and param.StorageType == StorageType.ElementId:
+                level_id = param.AsElementId()
+                if level_id != ElementId.InvalidElementId:
+                    level = doc.GetElement(level_id)
+                    if level and isinstance(level, Level):
+                        element_levels.append(level)
+                        level_params_found.append(param_name)
+                        debug_print("Element {0} has generic level parameter {1} with value {2}".format(
+                            element_id, param_name, level.Name))
+            
+        # Try directly with built-in parameters as a fallback
+        if not element_levels:
+            for param_name, bip in LEVEL_PARAM_NAMES.items():
+                try:
+                    param = element.get_Parameter(bip)
+                    if param and param.HasValue and param.StorageType == StorageType.ElementId:
+                        level_id = param.AsElementId()
+                        if level_id != ElementId.InvalidElementId:
+                            level = doc.GetElement(level_id)
+                            if level and isinstance(level, Level):
+                                element_levels.append(level)
+                                # Use the original string name for reporting
+                                for orig_name, mapped_bip in PARAM_MAPPING.items():
+                                    if mapped_bip == bip:
+                                        level_params_found.append(orig_name)
+                                        break
+                                else:
+                                    level_params_found.append(param_name)
+                                debug_print("Element {0} has built-in level parameter {1} with value {2}".format(
+                                    element_id, param_name, level.Name))
+                except:
+                    continue
     
     # If no level parameters found, try to determine by Z coordinate
     if not element_levels:
@@ -234,9 +327,11 @@ def get_element_levels(element, level_param_names, all_levels):
                 
                 # If it spans multiple levels
                 levels_spanned = []
-                for i, level in enumerate(sorted(all_levels, key=lambda l: l.Elevation)):
-                    if i < len(all_levels) - 1:
-                        next_level = sorted(all_levels, key=lambda l: l.Elevation)[i + 1]
+                sorted_levels = sorted(all_levels, key=lambda l: l.Elevation)
+                
+                for i, level in enumerate(sorted_levels):
+                    if i < len(sorted_levels) - 1:
+                        next_level = sorted_levels[i + 1]
                         if level.Elevation <= bbox.Min.Z and bbox.Max.Z >= next_level.Elevation:
                             # Element spans multiple levels
                             levels_spanned.append(level)
@@ -301,7 +396,7 @@ def process_elements(category_data, level_param_names):
         # Process each element in the category
         for element in elements:
             element_id = element.Id.IntegerValue
-            element_levels, level_params_found = get_element_levels(element, level_param_names, all_levels)
+            element_levels, level_params_found = get_element_levels(element, category_info, level_param_names, all_levels)
             
             # No level parameters found
             if not element_levels:
@@ -314,9 +409,15 @@ def process_elements(category_data, level_param_names):
             if len(element_levels) == 1:
                 level_name = element_levels[0].Name
                 param_name = level_params_found[0] if level_params_found else "Unknown"
+                
+                # Check if this was determined by Z-coordinate
+                if param_name == "Z-Coordinate":
+                    results["z_coord"].append((category_name, element.Id))
+                else:
+                    results["single_param"].append((category_name, element.Id, level_name, param_name))
+                
                 debug_print("Element {0} has single level parameter: {1} from {2}".format(
                     element_id, level_name, param_name))
-                results["single_param"].append((category_name, element.Id, level_name, param_name))
                 category_results[category_name].append({"id": element_id, "status": "Single Parameter", "level": level_name, "params": param_name})
                 continue
                 
