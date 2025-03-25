@@ -1,0 +1,3 @@
+# Excel files and settings.json (contains user-specific paths)
+settings.json
+*.xlsx

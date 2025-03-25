@@ -1,0 +1,15 @@
+{
+  "DEBUG_MODE": true,
+  "TEST_MODE": true,
+  "TEST_ITEM_COUNT": 10,
+  "TEST_LINK_ITEM_COUNT": 2,
+  "OUTPUT_TO_EXCEL": true,
+  "INCLUDE_LINKED_MODELS": true,
+  "EXCEL_CONFIG_PATH": "",
+  "CATEGORIES_TO_CHECK": [
+    "Assemblies", 
+    "Duct Linings", 
+    "Air Terminals", 
+    "Walls"
+  ]
+}
