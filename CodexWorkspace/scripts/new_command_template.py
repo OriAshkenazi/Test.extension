@@ -1,5 +1,5 @@
-#! python3
-# pyRevit script template aligned with Revit 2023 guidelines.
+#! python
+# pyRevit script template aligned with Revit 2023 guidelines (IronPython-safe).
 
 from Autodesk.Revit.DB import (
     BuiltInCategory,
@@ -50,4 +50,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

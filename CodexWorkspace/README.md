@@ -3,7 +3,7 @@
 This workspace collects the essentials from `Revit_2023_Development_Guidelines_with_LLM_Integration.md` so Codex sessions can start quickly on Revit 2023 automation tasks.
 
 ## Quick Start
-- Target **CPython 3.9** with pyRevit 5.2 (`#! python3` header on every script).
+- Default to **IronPython 2.7** with pyRevit 5.2 (`#! python`) whenever scripts touch `pyrevit.forms` or other UI helpers; reserve **CPython 3.9** (`#! python3`) for automation that does not depend on those modules.
 - Assume Autodesk Revit 2023 APIs and avoid legacy `Document.New*` patterns.
 - Keep transactions explicit (`Transaction.Start()` / `Commit()`), and roll back inside `except` blocks.
 - Convert Python iterables to .NET collections (`List[ElementId]`) at API boundaries.
@@ -22,4 +22,3 @@ This workspace collects the essentials from `Revit_2023_Development_Guidelines_w
 ## References
 - Primary source: `../Revit_2023_Development_Guidelines_with_LLM_Integration.md`.
 - Autodesk Revit 2023 API docs (lookup specifics when prompted).
-
