@@ -2,7 +2,7 @@
 # pyRevit: Create 3D views per selected Scope Box and apply template
 
 from Autodesk.Revit.DB import (
-    FilteredElementCollector, BuiltInCategory,
+    FilteredElementCollector, BuiltInCategory, BuiltInParameter,
     Transaction, TransactionGroup,
     ViewFamilyType, ViewFamily, View3D, View, ViewType,
     BoundingBoxXYZ, XYZ
@@ -69,6 +69,16 @@ def find_template_by_name(d, name):
                 return v  # some builds lack ViewType on template; trust name
     return None
 
+def scope_box_parameter(view):
+    """Return the Parameter controlling the view's scope box, if any."""
+    scope_param = None
+    bip = getattr(BuiltInParameter, "VIEWER_VOLUME_OF_INTEREST", None)
+    if bip is not None:
+        scope_param = view.get_Parameter(bip)
+    if not scope_param:
+        scope_param = view.LookupParameter("Scope Box")
+    return scope_param
+
 # ---------- collect selection ----------
 pre_ids = list(uidoc.Selection.GetElementIds())
 pre_sb = []
@@ -129,6 +139,13 @@ for sb in sboxes:
         if isinstance(bbox, BoundingBoxXYZ):
             v.IsSectionBoxActive = True
             v.SetSectionBox(bbox)
+
+        # bind the view to the scope box so later edits follow it
+        scope_param = scope_box_parameter(v)
+        if scope_param and not scope_param.IsReadOnly:
+            scope_param.Set(sb.Id)
+        else:
+            raise Exception("Scope Box parameter unavailable or locked by template.")
 
         # name then apply template
         v.Name = view_name
