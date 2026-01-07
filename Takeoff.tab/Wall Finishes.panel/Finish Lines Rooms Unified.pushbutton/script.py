@@ -1,11 +1,12 @@
 #! python
-# Finish Lines Rooms Unified: multi-view, per-room segments, multi-CSV export.
+# Finish Lines Rooms Unified: multi-view, per-room segments, single-CSV export.
 
 import clr
 clr.AddReference('RevitAPI')
 clr.AddReference('System')
 
 import os
+import datetime
 
 from Autodesk.Revit.DB import (
     BuiltInCategory,
@@ -413,7 +414,20 @@ def write_csv(path, headers, rows):
         writer.Close()
 
 
-def build_rows_for_view(view, headers):
+def sort_rows(rows):
+    def sort_key(row):
+        line_type = (row[0] or "").lower()
+        floor_name = (row[1] or "").lower()
+        room_name = (row[2] or "").lower()
+        try:
+            wall_area = float(row[3])
+        except Exception:
+            wall_area = 0.0
+        return (line_type, floor_name, room_name, wall_area)
+    return sorted(rows, key=sort_key)
+
+
+def build_rows_for_view(view):
     view_level = getattr(view, "GenLevel", None)
     if not view_level and hasattr(view, "LevelId") and view.LevelId != ElementId.InvalidElementId:
         view_level = doc.GetElement(view.LevelId)
@@ -456,6 +470,7 @@ def build_rows_for_view(view, headers):
     tol = 1e-6
     distance_params = [0.0, 0.25, 0.5, 0.75, 1.0]
     match_id_counter = 1
+    floor_name = view.Name or ""
 
     for line in lines:
         curve = curve_from_line(line)
@@ -532,15 +547,16 @@ def build_rows_for_view(view, headers):
             wall_area_m2 = (segment_length_cm * room_height_cm) / 10000.0
             rows.append(
                 [
-                    line.Id.ToString(),
                     line_type_name,
+                    floor_name,
+                    info.name or "",
+                    format_num(wall_area_m2),
+                    line.Id.ToString(),
                     format_num(segment_length_cm),
                     format_num(original_length_cm),
                     str(info.room_id.IntegerValue),
                     info.number or "",
-                    info.name or "",
                     format_num(room_height_cm),
-                    format_num(wall_area_m2),
                     str(match_id),
                     format_num(to_cm(distance_internal)) if distance_internal is not None else "",
                 ]
@@ -552,15 +568,16 @@ def build_rows_for_view(view, headers):
 def main():
     views = pick_floor_plans(doc)
     headers = [
-        "LineId",
         "LineType",
+        "FloorName",
+        "RoomName",
+        "WallAreaM^2",
+        "LineId",
         "LineLengthCm",
         "OriginalLineLengthCm",
         "RoomId",
         "RoomNumber",
-        "RoomName",
         "RoomHeightCm",
-        "WallAreaM^2",
         "MultiRoomFlag",
         "NearestBoundaryDistanceCm",
     ]
@@ -570,25 +587,27 @@ def main():
         forms.alert("Export canceled.", exitscript=True)
 
     messages = []
-    used_names = set()
-    written = []
+    all_rows = []
 
     for view in views:
-        rows, warning = build_rows_for_view(view, headers)
+        rows, warning = build_rows_for_view(view)
         if warning:
             messages.append(warning)
         if rows is None:
             continue
-        base_name = sanitize_filename(view.Name)
-        file_name = unique_filename(base_name, used_names)
-        path = os.path.join(output_dir, "{}.csv".format(file_name))
-        write_csv(path, headers, rows)
-        written.append(path)
+        all_rows.extend(rows)
 
-    if not written:
+    if not all_rows:
         forms.alert("No data to export.\n{}".format("\n".join(messages)), exitscript=True)
 
-    summary = ["Exported {} CSV file(s) to:".format(len(written)), output_dir]
+    model_name = sanitize_filename(doc.Title or "Model")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    base_name = "{}_{}".format(model_name, timestamp)
+    file_name = sanitize_filename(base_name)
+    path = os.path.join(output_dir, "{}.csv".format(file_name))
+    write_csv(path, headers, sort_rows(all_rows))
+
+    summary = ["Exported 1 CSV file to:", path]
     if messages:
         summary.append("")
         summary.append("Notes:")
