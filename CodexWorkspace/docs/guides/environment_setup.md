@@ -1,8 +1,10 @@
 # Environment Setup Snapshot
 
-- Use **pyRevit 5.2** with the **CPython 3.9** engine (`#! python3` header in every script).
+- pyRevit supports **IronPython 2.7** and **CPython 3.x**. Use an explicit script header:
+  - `#! python` for Revit/UI-first scripts (stable Revit API + pyRevit UX patterns)
+  - `#! python3` when you need Python 3 features and external libraries (e.g., `openpyxl`, `pandas`)
+- When mixing engines, keep **Revit API read/write + UI orchestration** in IronPython and offload heavy processing to CPython via a small file-based interface (e.g., JSON) documented in your tool.
 - Target **Autodesk Revit 2023** APIs; remove or avoid 2019 compatibility shims.
-- Keep a consistent CPython engine across the team to avoid behavioral drift.
+- Keep a consistent CPython interpreter/version across the team when using CPython scripts to avoid behavioral drift.
 - Treat ElementIds as opaque tokens (Revit 2023 moves toward 64-bit ids).
 - Favor modern creation APIs (e.g., `Floor.Create`, `ViewSheet.Duplicate`) over removed `Document.New*` calls.
-

@@ -1,12 +1,12 @@
 # Revit 2023 Development Guidelines with LLM Integration
 
 ## Environment Setup
-- **Python Version:** **CPython 3.9** (pyRevit 5.2 CPython engine). Use the `#! python3` header to select CPython.
+- **Python Engine:** pyRevit supports **IronPython 2.7** (`#! python`) and **CPython 3.x** (`#! python3`). Pick the engine per script and keep it explicit in the file header.
 - **Platform:** **Autodesk Revit 2023** (no 2019 compatibility in scope).
 - **Framework:** **pyRevit 5.2**.
-- **Required File Header:** `#! python3` at the top of each script.
+- **Required File Header:** Use `#! python` or `#! python3` at the top of each script (don’t omit it).
 
-> Tip: In pyRevit, you can install/enable the CPython 3 engine and set it as default for your scripts. Keep your team on the same engine for consistent behavior.
+> Tip: Keep your team on the same default engine and CPython interpreter/version where possible, but still set the per-script header explicitly when the engine matters.
 
 ---
 
@@ -253,6 +253,8 @@ except Exception:
 ---
 
 ## Appendix: Prompt Templates (Copy/Paste)
+
+Note: When the script engine matters, explicitly request `#! python` (IronPython) or `#! python3` (CPython) in your prompt.
 
 **“Generate code using Revit 2023 API”**  
 > “Write a pyRevit (CPython 3.9) script that collects all Rooms, sums their Area per Level, and writes the total into a project parameter `Level Total Area`. Use explicit transactions, proper .NET collections, and handle missing parameters gracefully. Return a dict[LevelId, double] as a result.”

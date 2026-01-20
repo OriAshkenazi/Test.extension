@@ -10,6 +10,7 @@ This folder is the fast navigation layer for guidance used by Codex when working
 - LLM prompting guidelines: `guides/llm_prompting_guidelines.md`
 - Performance notes: `guides/performance_notes.md`
 - Troubleshooting: `guides/troubleshooting.md`
+- PyRevit (engine selection, architecture, selection/parameters): `guides/pyrevit/`
 
 ## Checklists
 - Code review: `checklists/code_review_checklist.md`
@@ -19,4 +20,3 @@ This folder is the fast navigation layer for guidance used by Codex when working
 - Align+Move button: `plans/align_move_button_plan.md`
 - Finish lines multi-room flag: `plans/finish_lines_multi_room_flag_plan.md`
 - Finish lines to rooms: `plans/finish_lines_to_rooms_plan.md`
-
