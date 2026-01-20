@@ -1,4 +1,8 @@
-# Best Practices for PyRevit Scripts in IronPython 2.7 vs. CPython 3.12
+# Best Practices for PyRevit Scripts in IronPython 2.7 vs. CPython (`#! python3`)
+
+Verified against pyRevitLabs documentation:
+- https://pyrevitlabs.notion.site/Anatomy-of-CPython-Scripts-0e4cffeb545c4aa699fbe722c837c8d0
+- https://pyrevitlabs.notion.site/Create-Your-First-CPython-Command-b8a7718c554645d1a18454c0b363e3c9
 
 ## Overview: IronPython and CPython in PyRevit
 
@@ -8,7 +12,9 @@ PyRevit supports two Python engines for scripting: **IronPython 2.7** (a .NET-in
 
 **IronPython (Python 2.7)** is embedded in Revit’s .NET runtime, which means it interacts with the Revit API very naturally. IronPython’s `clr` module is built-in, and Revit API assemblies are usually preloaded by PyRevit – you can often import Revit API classes directly without manually adding references. IronPython seamlessly handles .NET types and conventions (e.g. properties, indexers, enums) in Python code. However, being Python 2.7, it lacks modern Python features and cannot use many PyPI libraries built in C (like NumPy/Pandas), and it has a different string/Unicode handling than Python 3.
 
-**CPython (Python 3.12)** in PyRevit uses the Python.NET bridge to interact with .NET. This allows use of Python 3 features and the vast ecosystem of scientific libraries, but it introduces some friction in Revit API usage. In CPython scripts, you must explicitly load the Revit API assemblies via `pythonnet.clr` (since IronPython’s automatic CLR integration is not present). For example, a CPython script should start with:
+**CPython (`#! python3`)** in pyRevit runs on pyRevit's embedded CPython engine and uses **pythonnet** to bridge .NET. The pyRevitLabs docs warn the CPython engine is under active development and might be unstable; prefer IronPython unless you need C-based packages (e.g., `numpy`, `scipy`).
+
+If you need to explicitly load additional .NET assemblies in CPython, use `clr.AddReference(...)`. For example, a CPython script could start with:
 
 ```python
 #! python3
@@ -22,7 +28,22 @@ doc = __revit__.ActiveUIDocument.Document  # Current document
 
 Once assemblies are loaded, you can call Revit API functions, but **certain patterns differ**. IronPython often auto-converts or exposes .NET properties/methods more Pythonically, whereas CPython (via Python.NET) may require explicit method calls or type conversions. For instance, an IronPython script can index a **`IntersectionResultArray`** via `.Item[0]`, but in CPython the same property is not directly accessible – you must call the underlying `.get_Item(0)` method. Similarly, Revit API methods that return enum values or tuples might appear differently. Be prepared to inspect .NET objects (with `dir()` or `.__class__`) in CPython and call their methods explicitly.
 
-**Stability and Support:** As of PyRevit 5.x, IronPython remains the more stable choice for most tasks. The PyRevit team explicitly mentions that CPython support is *“not fully supported”* and still under development. Features like the built-in PyRevit logger and forms library are **incompatible with CPython scripts**. In practice, this means **IronPython should handle all PyRevit-specific UI/UX** (ribbon button binding, forms, output window logging, etc.), whereas CPython should be reserved for the heavy lifting that IronPython cannot do (primarily use of scientific/data libraries). This separation of concerns will mitigate the instability of CPython and play to each engine’s strengths.
+**Implementing Revit API .NET interfaces in CPython:** The pyRevitLabs docs note that when using CPython+pythonnet to implement Revit API interfaces (e.g., `Autodesk.Revit.DB.ISelectionFilter` for `PickObject`), you must set a `__namespace__` attribute on the derived class, and it must be unique per execution (to avoid “Duplicate type name within an assembly”). A common pattern is:
+
+```python
+from pyrevit import EXEC_PARAMS
+
+class MySelectionFilter(Selection.ISelectionFilter):
+    __namespace__ = EXEC_PARAMS.exec_id
+```
+
+**Stability and Support:** The pyRevitLabs docs warn the CPython engine is under active development and might be unstable. Prefer IronPython for general development and use CPython primarily when you need C-based packages (e.g., `numpy`, `scipy`).
+
+**CPython basics (from pyRevitLabs docs):**
+- Put `#! python3` on the first line to run a command under CPython.
+- Use a 64-bit CPython environment (Revit is 64-bit).
+- pyRevit's embedded CPython engine looks at `PYTHONPATH` for additional module search paths.
+- CPython scripts are read using UTF-8; there is no need for `# -*- coding: utf-8 -*-`.
 
 ## Script Architecture and Module Separation
 
@@ -73,11 +94,11 @@ This list (or dict mapping IDs to values) can then be written as JSON to a file 
 
 ## Data Manipulation and Analysis (CPython)
 
-Heavy data crunching – such as tabular data manipulation with **Pandas**, numerical computations with **NumPy/SciPy**, or reading/writing Excel via **openpyxl** – should be done in a **CPython 3.12 script**. Here’s how to make the most of CPython while avoiding pitfalls:
+Heavy data crunching – such as tabular data manipulation with **Pandas**, numerical computations with **NumPy/SciPy**, or reading/writing Excel via **openpyxl** – should be done in a **CPython script** (`#! python3`). Here’s how to make the most of CPython while avoiding pitfalls:
 
-* **Setting Up the CPython Environment:** PyRevit 5.2 includes an embedded CPython engine (the user mentions Python 3.12, which likely is the engine version). Before using libraries like pandas or scipy, they must be installed into the PyRevit CPython environment. This can often be done by running pip in the context of PyRevit’s Python. For example, using the PyRevit CLI or directly calling pip: `pyrevit env pip install pandas`. (Alternatively, as suggested on the forums, you could create a virtual environment, install needed packages, then copy the packages into PyRevit’s `site-packages` or an extension `.lib` folder for portability.) Ensuring these packages are available is a pre-requisite.
+* **Setting Up the CPython Environment:** pyRevit uses an embedded CPython engine and looks at the `PYTHONPATH` environment variable for additional module search paths. Install required packages (e.g., with `pip`/`pipenv`) and ensure they are discoverable via `PYTHONPATH` for pyRevit CPython commands. Also ensure you use a 64-bit CPython environment (Revit is 64-bit).
 
-* **Launching CPython from IronPython:** Because you cannot mix IronPython and CPython in the same script, you will **run the CPython logic as a separate step**. The most robust approach is to use the standard library `subprocess` from the IronPython side to call an external Python process. For example, the IronPython script can find the path to PyRevit’s embedded `python.exe` (or use a known system Python 3.12 if configured) and execute a command like:
+* **Running CPython from IronPython (optional):** If you want the command itself to be IronPython (e.g., for UI/stability) but still leverage CPython-only packages, run the CPython logic as a separate step (e.g., an external process) and exchange data via files (JSON/CSV). Keep the interface small and well-defined.
 
   ```python
   import subprocess, sys
@@ -95,7 +116,7 @@ py_exec = r"C:\Users\<User>\AppData\Roaming\pyRevit\Python312\python.exe"  # Exa
   * Use **Pandas** to filter, join, or aggregate data by PBS/GBS codes. For instance, you might load the JSON into a DataFrame, or if using CSV, directly use `pandas.read_csv`. Pandas can help match elements to reference data (perhaps an external mapping of element types to PBS codes, or computing statistics like total quantities).
   * Use **NumPy/SciPy** for numerical operations – e.g., if determining GBS zones by coordinates, you could use NumPy arrays for distance calculations or SciPy clustering algorithms if needed (though often simpler geometric logic might suffice with raw math).
   * Use **openpyxl** if you need to read or write Excel files (e.g., reading a PBS code mapping table maintained in Excel, or exporting results). Since openpyxl is pure Python, it could run under IronPython, but installing it in IronPython is harder; with CPython it’s straightforward. If reading an Excel mapping, do it here and perhaps include the mapping logic in the analysis.
-  * Ensure **minimal Revit API usage in CPython**. Ideally, the CPython script works with plain data. It should not try to call back into Revit’s document (leave that to IronPython). However, if absolutely necessary, CPython *can* access the Revit API via Python.NET (for example, creating geometry or using `XYZ` math) as long as you `clr.AddReference` to the needed DLLs. Just remember that pyRevit’s convenience libraries like `pyrevit.revit` or `pyrevit.forms` won’t be available in CPython. If you need certain .NET functionality (say, using the `XYZ` struct for geometry math or the `Transform` class), you can import those from `Autodesk.Revit.DB` after adding references, and they will function. The earlier example of an intersection calculation in CPython demonstrated that you can call Revit API methods, but sometimes need to handle the results carefully (like using tuple results and `.get_Item` methods). Generally, try to limit Revit API calls in CPython to avoid complexity. Do any complex Revit interactions back in IronPython.
+  * Ensure **minimal Revit API usage in CPython**. Ideally, the CPython script works with plain data. It should not try to call back into Revit’s document (leave that to IronPython). However, if absolutely necessary, CPython *can* access the Revit API via Python.NET (for example, creating geometry or using `XYZ` math) as long as you `clr.AddReference` to the needed DLLs. Note: pyRevit helper modules can be available in CPython (e.g., the official "Create Your First CPython Command" example uses `from pyrevit import revit`). If you hit UI/tooling limitations, keep UI and complex Revit interactions in IronPython and use CPython mainly for heavy, library-driven work. If you need certain .NET functionality (say, using the `XYZ` struct for geometry math or the `Transform` class), you can import those from `Autodesk.Revit.DB` after adding references, and they will function. The earlier example of an intersection calculation in CPython demonstrated that you can call Revit API methods, but sometimes need to handle the results carefully (like using tuple results and `.get_Item` methods). Generally, try to limit Revit API calls in CPython to avoid complexity. Do any complex Revit interactions back in IronPython.
 
 * **Handling Results:** After crunching the data, the CPython script should output a result dataset in a form that IronPython can easily consume. Again, JSON is a good choice for structured data (or CSV for tabular data). For example, the CPython script could produce a JSON mapping of element IDs to the determined PBS and GBS codes, or a CSV with columns `ElementId, PBSCode, GBSCode, [Other metrics]`. Write this to the `output_data_file` path provided. Keep the output minimal – just the information needed to update the model or to present to the user. This might be a list of elements that couldn’t be matched (for reporting) and the values for those that did match.
 
@@ -137,7 +158,7 @@ After CPython returns the processed results, **IronPython takes over again to pu
 
 ## User Interface and PyRevit UI Stack (IronPython)
 
-User interaction is an important aspect of a robust tool. Since **pyRevit’s UI framework (forms, alerts, selection dialogs, etc.) only works with IronPython scripts**, plan to implement all UI in the IronPython portion. Here are UI considerations and best practices:
+User interaction is an important aspect of a robust tool. For stability, prefer implementing complex UI in IronPython (especially WPF-based dialogs). CPython scripts can still use many pyRevit helpers (e.g., `from pyrevit import revit`), but test UI-dependent pieces and fall back to IronPython if needed. Here are UI considerations and best practices:
 
 * **Using `pyrevit.forms`:** PyRevit provides a `forms` module for common dialogs and forms. For example, `forms.alert(msg)` can show a simple message box; `forms.ask_for_string()` can prompt the user for input; `forms.select_file()` can open a file dialog. More complex interfaces can be built with **WPF XAML** definitions and loaded via `pyrevit.forms.WPFWindow()` if needed. If your script needs to let the user choose options (like which Excel file to load, or which categories to process, etc.), do this via forms in IronPython **before** kicking off the CPython process. This ensures you gather all necessary input while still in the IronPython context.
 
@@ -172,7 +193,7 @@ User interaction is an important aspect of a robust tool. Since **pyRevit’s UI
 
 * **Feedback to User:** While the CPython computation runs (which might take a few seconds for large data), you can’t directly update a PyRevit form (since the main script is waiting). However, you can give immediate feedback *before* and *after*. For example, display a message: `"Gathering data, please wait..."` before data extraction, then maybe a `"Running analysis..."` just before launching CPython (perhaps using `script.get_output().print(...)` to the output pane). After the CPython returns and the model is updated, use `forms.alert("Successfully updated X elements")` or write a detailed summary to the output window. The PyRevit output window is a great place to show logs or even HTML tables of results if needed (PyRevit allows writing simple HTML to the output for formatted display).
 
-* **Avoid CPython UI:** Do not attempt to use `pyrevit.forms` or the PyRevit WPF system from a CPython script – it will not work (the internal WPF bindings are not available to CPython). If absolutely necessary, CPython can utilize .NET WinForms or even Tkinter for a popup, but this is generally not recommended for Revit add-ins. In one forum, a developer confirmed that WinForms can be used in CPython for simple dialogs (by adding references to System.Windows.Forms via Python.NET). But this should be a last resort. It's better to plan the workflow such that any dialog (e.g., file selection or confirmation) happens either **before** running the CPython analysis or **after** results are back (in IronPython), using PyRevit’s native UI. This keeps the user experience seamless within Revit’s window.
+* **CPython UI:** Prefer keeping user interaction in IronPython. If you run into issues using `pyrevit.forms`/WPF from CPython, move dialogs to IronPython and pass inputs/results to CPython via a simple handoff (e.g., JSON files).
 
 * **Progress Indicators:** If your data processing might take a long time, consider informing the user. A simple approach is printing progress messages as mentioned. A more advanced approach could be to use the Revit status bar (not straightforward from Python) or a modal progress window. PyRevit doesn’t have a built-in progress bar widget accessible to IronPython that easily updates during a long process (since Revit’s UI thread would be blocked), so often just textual feedback or splitting work into chunks (so Revit’s message pump can breathe) is used. For example, if scraping 10,000 elements, you might collect in batches and call `revit.uidoc.RefreshActiveView()` occasionally, but this can be overkill. In summary, keep the user informed but not with overly complex UI that could itself introduce instability.
 
@@ -196,9 +217,9 @@ By following these practices, IronPython and CPython can collaborate effectively
 
 ## Conclusion
 
-Developing a PyRevit tool with both IronPython 2.7 and CPython 3.12 requires a thoughtful architecture but offers the best of both worlds: direct access to the Revit API and UI through IronPython, and advanced data processing capabilities of CPython. Ensure that the heavy tasks (e.g. statistical computations, Excel I/O, large dataset manipulations) are isolated in the CPython domain, whereas any operation that touches Revit (reading or writing the model, or interacting with the user through Revit’s interface) stays in the IronPython domain. The **relationship between the two engines is cooperative but loosely coupled** – think of IronPython as the orchestrator and CPython as a computational service. By exchanging information through well-defined channels (files or other means) and respecting each engine’s strengths, you can build a robust automation solution. This separation of concerns not only improves stability (since CPython’s known limitations won’t compromise your UI or Revit interaction) but also makes the code more modular and testable, which aligns perfectly with an AI-first iterative development process.
+Developing a PyRevit tool with both IronPython 2.7 and CPython (`#! python3`) requires a thoughtful architecture but offers the best of both worlds: direct access to the Revit API and UI through IronPython, and advanced data processing capabilities of CPython. Ensure that the heavy tasks (e.g. statistical computations, Excel I/O, large dataset manipulations) are isolated in the CPython domain, whereas any operation that touches Revit (reading or writing the model, or interacting with the user through Revit’s interface) stays in the IronPython domain. The **relationship between the two engines is cooperative but loosely coupled** – think of IronPython as the orchestrator and CPython as a computational service. By exchanging information through well-defined channels (files or other means) and respecting each engine’s strengths, you can build a robust automation solution. This separation of concerns not only improves stability (since CPython’s known limitations won’t compromise your UI or Revit interaction) but also makes the code more modular and testable, which aligns perfectly with an AI-first iterative development process.
 
-Finally, maintain rigorous documentation within your code. Clearly comment on where IronPython ends and CPython begins, list the required libraries and their versions, and document the data formats used for communication. This will aid any future maintenance – whether by a human team or an AI coding assistant. With these best practices, your project on Revit 2023 with PyRevit 5.2 can efficiently leverage IronPython for model handling and CPython 3.12 for heavy data manipulation, providing a powerful and extensible toolchain for PBS/GBS data management in BIM.
+Finally, maintain rigorous documentation within your code. Clearly comment on where IronPython ends and CPython begins, list the required libraries and their versions, and document the data formats used for communication. This will aid any future maintenance – whether by a human team or an AI coding assistant. With these best practices, your project on Revit 2023 with PyRevit 5.2 can efficiently leverage IronPython for model handling and CPython for heavy data manipulation, providing a powerful and extensible toolchain for PBS/GBS data management in BIM.
 
 **Sources:**
 
