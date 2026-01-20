@@ -26,3 +26,4 @@ This repo includes a curated knowledge base under `CodexWorkspace/` that Codex s
 - **Commits**: keep commits small + scoped; prefer one logical change per commit; message format `type: summary` (e.g., `docs: add dev workflow guide`).
 - **Hygiene**: run `git status -sb` before/after changes; avoid mixing unrelated edits; avoid destructive commands (e.g., `git reset --hard`) unless explicitly requested.
 - **Naming**: use `snake_case` for reusable modules; for standalone helper scripts prefer lower-kebab where practical (pyRevit command entrypoints stay as `script.py`).
+- **Docs**: prefer lower `snake_case.md` filenames (exceptions: `README.md`, `AGENTS.md`); when moving docs, prefer `git mv` + updating references over file-based “Moved to …” stubs.

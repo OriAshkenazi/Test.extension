@@ -7,3 +7,4 @@
 - [ ] **Commit message** uses `type: summary` and describes the change succinctly.
 - [ ] **Validation** run where applicable (tests if present; otherwise at least `python -m py_compile` for edited Python files).
 - [ ] **Docs** updated when behavior/workflow changes (and indexes updated if docs moved/added).
+- [ ] **Docs naming** follows lower `snake_case.md` (exceptions: `README.md`, `AGENTS.md`); avoid file-based "Moved to ..." stubs.

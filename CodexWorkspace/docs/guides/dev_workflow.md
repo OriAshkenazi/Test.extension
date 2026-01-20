@@ -18,13 +18,15 @@
 - Avoid destructive commands (`git reset --hard`, `git checkout --`) unless explicitly requested.
 
 ## Documentation Hygiene
-- If you change a tool’s behavior, update the relevant `CodexWorkspace/docs/` pages and any tool-specific docs near the code.
+- If you change a tool's behavior, update the relevant `CodexWorkspace/docs/` pages and any tool-specific docs near the code.
 - Keep `CodexWorkspace/docs/README.md` (and checklist indexes) up to date when adding/moving docs.
+- When moving/renaming docs, prefer `git mv` + updating references over file-based "Moved to ..." stubs.
 
 ## Naming Conventions
 - **Python modules**: `snake_case.py` for reusable libraries/utilities.
 - **Standalone helper scripts**: prefer lower-kebab names where practical.
 - **pyRevit command entrypoints**: keep the conventional `script.py` inside `*.pushbutton/` bundles.
+- **Docs**: prefer lower `snake_case.md` filenames (exceptions: `README.md`, `AGENTS.md`).
 
 ## Validation
 - If tests exist, run them (start with the smallest relevant subset, then broader runs).
