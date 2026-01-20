@@ -13,7 +13,9 @@ from Autodesk.Revit.DB import (
     FilteredElementCollector,
     FilteredWorksetCollector,
     IDuplicateTypeNamesHandler,
+    Level,
     RevitLinkInstance,
+    StorageType,
     Transaction,
     WorksetKind,
 )
@@ -62,6 +64,107 @@ class CategoryWrap(object):
 class DuplicateTypeHandler(IDuplicateTypeNamesHandler):
     def OnDuplicateTypeNamesFound(self, args):
         return DuplicateTypeAction.UseDestinationTypes
+
+
+def _normalize_level_name(level_name):
+    try:
+        return level_name.strip().lower()
+    except Exception:
+        return None
+
+
+def _get_level_param_bips():
+    bips = [
+        BuiltInParameter.LEVEL_PARAM,
+        BuiltInParameter.SCHEDULE_LEVEL_PARAM,
+        BuiltInParameter.FAMILY_LEVEL_PARAM,
+        BuiltInParameter.INSTANCE_SCHEDULE_ONLY_LEVEL_PARAM,
+    ]
+    for bip_name in [
+        "INSTANCE_REFERENCE_LEVEL_PARAM",
+        "FAMILY_BASE_LEVEL_PARAM",
+        "FAMILY_TOP_LEVEL_PARAM",
+        "RBS_START_LEVEL_PARAM",
+        "RBS_END_LEVEL_PARAM",
+        "RBS_REFERENCE_LEVEL_PARAM",
+        "WALL_BASE_CONSTRAINT",
+        "WALL_HEIGHT_TYPE",
+    ]:
+        bip = getattr(BuiltInParameter, bip_name, None)
+        if bip and bip not in bips:
+            bips.append(bip)
+    return bips
+
+
+LEVEL_PARAM_BIPS = _get_level_param_bips()
+
+
+def _build_level_id_map_by_name(host_doc):
+    level_id_by_name = {}
+    for level in FilteredElementCollector(host_doc).OfClass(Level):
+        key = _normalize_level_name(level.Name)
+        if key and key not in level_id_by_name:
+            level_id_by_name[key] = level.Id
+    return level_id_by_name
+
+
+def _get_level_names_by_param(elem, elem_doc):
+    names_by_bip = {}
+    for bip in LEVEL_PARAM_BIPS:
+        try:
+            param = elem.get_Parameter(bip)
+        except Exception:
+            param = None
+        if not param or not param.HasValue:
+            continue
+        if param.StorageType != StorageType.ElementId:
+            continue
+        level_id = param.AsElementId()
+        if level_id == ElementId.InvalidElementId:
+            continue
+        level_elem = elem_doc.GetElement(level_id)
+        if not level_elem or not isinstance(level_elem, Level):
+            continue
+        names_by_bip[bip] = level_elem.Name
+    return names_by_bip
+
+
+def _remap_level_params_on_copied_elements(source_doc, dest_doc, source_ids, dest_ids):
+    level_id_by_name = _build_level_id_map_by_name(dest_doc)
+    if not level_id_by_name:
+        return 0
+
+    updated_element_count = 0
+    for src_id, dst_id in zip(source_ids, dest_ids):
+        src_elem = source_doc.GetElement(src_id)
+        dst_elem = dest_doc.GetElement(dst_id)
+        if not src_elem or not dst_elem:
+            continue
+
+        src_levels_by_bip = _get_level_names_by_param(src_elem, source_doc)
+        if not src_levels_by_bip:
+            continue
+
+        updated_this_element = False
+        for bip, level_name in src_levels_by_bip.items():
+            dest_level_id = level_id_by_name.get(_normalize_level_name(level_name))
+            if not dest_level_id:
+                continue
+            dst_param = dst_elem.get_Parameter(bip)
+            if not dst_param or dst_param.IsReadOnly:
+                continue
+            if dst_param.StorageType != StorageType.ElementId:
+                continue
+            try:
+                dst_param.Set(dest_level_id)
+                updated_this_element = True
+            except Exception:
+                continue
+
+        if updated_this_element:
+            updated_element_count += 1
+
+    return updated_element_count
 
 
 def get_link_instances(host_doc):
@@ -201,7 +304,11 @@ def main():
             transform,
             copy_options
         )
-        assign_workset(doc, new_ids, active_workset_id)
+        new_ids_list = list(new_ids)
+        assign_workset(doc, new_ids_list, active_workset_id)
+        level_remap_count = _remap_level_params_on_copied_elements(
+            link_doc, doc, element_ids, new_ids_list
+        )
         transaction.Commit()
     except Exception as exc:
         transaction.RollBack()
@@ -214,6 +321,7 @@ def main():
         lines.append("Workset: {}".format(workset_name))
     lines.append("Category: {}".format(category.Name))
     lines.append("Copied: {}".format(len(new_ids)))
+    lines.append("Levels remapped: {}".format(level_remap_count))
     if active_workset_name:
         lines.append("Target workset: {}".format(active_workset_name))
     forms.alert("\n".join(lines))
