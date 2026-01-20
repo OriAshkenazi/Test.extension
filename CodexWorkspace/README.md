@@ -21,5 +21,5 @@ This workspace is a curated knowledge base so Codex sessions can start quickly o
 4. Use the docs index (`docs/README.md`) to jump to guides/reference quickly.
 
 ## References
-- Primary source: `docs/reference/Revit_2023_Development_Guidelines_with_LLM_Integration.md`.
+- Primary source: `docs/reference/revit_2023_development_guidelines_with_llm_integration.md`.
 - Autodesk Revit 2023 API docs (lookup specifics when prompted).

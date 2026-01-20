@@ -3,7 +3,7 @@
 This folder is the fast navigation layer for guidance used by Codex when working on this repo.
 
 ## Reference
-- Revit 2023 guidelines: `reference/Revit_2023_Development_Guidelines_with_LLM_Integration.md`
+- Revit 2023 guidelines: `reference/revit_2023_development_guidelines_with_llm_integration.md`
 
 ## Guides
 - Dev workflow: `guides/dev_workflow.md`
