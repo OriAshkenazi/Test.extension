@@ -17,6 +17,10 @@
 - Avoid mixing unrelated changes in a single commit.
 - Avoid destructive commands (`git reset --hard`, `git checkout --`) unless explicitly requested.
 
+## Documentation Hygiene
+- If you change a tool’s behavior, update the relevant `CodexWorkspace/docs/` pages and any tool-specific docs near the code.
+- Keep `CodexWorkspace/docs/README.md` (and checklist indexes) up to date when adding/moving docs.
+
 ## Naming Conventions
 - **Python modules**: `snake_case.py` for reusable libraries/utilities.
 - **Standalone helper scripts**: prefer lower-kebab names where practical.
@@ -25,4 +29,3 @@
 ## Validation
 - If tests exist, run them (start with the smallest relevant subset, then broader runs).
 - For script-only changes without tests, at least run a quick syntax check on edited Python files (e.g., `python -m py_compile ...`).
-
