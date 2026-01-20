@@ -6,6 +6,7 @@ This folder is the fast navigation layer for guidance used by Codex when working
 - Revit 2023 guidelines: `reference/Revit_2023_Development_Guidelines_with_LLM_Integration.md`
 
 ## Guides
+- Dev workflow: `guides/dev_workflow.md`
 - Environment setup: `guides/environment_setup.md`
 - LLM prompting guidelines: `guides/llm_prompting_guidelines.md`
 - Performance notes: `guides/performance_notes.md`
@@ -14,6 +15,7 @@ This folder is the fast navigation layer for guidance used by Codex when working
 
 ## Checklists
 - Code review: `checklists/code_review_checklist.md`
+- Git hygiene: `checklists/git_hygiene_checklist.md`
 - Testing strategy: `checklists/testing_strategy.md`
 
 ## Plans (Work Notes)

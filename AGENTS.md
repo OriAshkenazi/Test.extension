@@ -20,3 +20,9 @@ This repo includes a curated knowledge base under `CodexWorkspace/` that Codex s
 - Keep transactions explicit (`Start/Commit`, `RollBack` on exceptions).
 - Convert Python iterables to .NET collections at Revit API boundaries when required (e.g., `List[ElementId]`).
 
+## Git Workflow
+- **Branch naming**: use `<prefix>/<short-topic>` (e.g., `docs/codexworkspace-nav`, `fix/copy-level-remap`).
+- **Prefix guide**: `agent/` setup, `docs/` documentation-only, `feat/` new behavior, `fix/` bug fix, `refactor/` structure-only, `test/` tests only, `chore/` maintenance.
+- **Commits**: keep commits small + scoped; prefer one logical change per commit; message format `type: summary` (e.g., `docs: add dev workflow guide`).
+- **Hygiene**: run `git status -sb` before/after changes; avoid mixing unrelated edits; avoid destructive commands (e.g., `git reset --hard`) unless explicitly requested.
+- **Naming**: use `snake_case` for reusable modules; for standalone helper scripts prefer lower-kebab where practical (pyRevit command entrypoints stay as `script.py`).
