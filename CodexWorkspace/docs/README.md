@@ -1,24 +1,33 @@
 # CodexWorkspace Docs
 
-This folder is the fast navigation layer for guidance used by Codex when working on this repo.
+This folder is the navigation layer for static documentation. The primary human-facing usage guide lives in [`human/README.md`](human/README.md); agent-only references live under [`agent/`](agent/).
 
-## Reference
-- Revit 2023 guidelines: `reference/revit_2023_development_guidelines_with_llm_integration.md`
+## Human Docs (Start Here)
+- Start Here: [`human/README.md`](human/README.md)
+- Environment setup: [`human/environment_setup.md`](human/environment_setup.md)
+- Troubleshooting: [`human/troubleshooting.md`](human/troubleshooting.md)
 
-## Guides
-- Dev workflow: `guides/dev_workflow.md`
-- Environment setup: `guides/environment_setup.md`
-- LLM prompting guidelines: `guides/llm_prompting_guidelines.md`
-- Performance notes: `guides/performance_notes.md`
-- Troubleshooting: `guides/troubleshooting.md`
-- PyRevit (engine selection, architecture, selection/parameters): `guides/pyrevit/`
+## Agent Docs
+- Agent index: [`agent/README.md`](agent/README.md)
+- AI-orchestrated methodology: [`agent/ai_orchestrated_dev_methodology.md`](agent/ai_orchestrated_dev_methodology.md)
+- Dev workflow: [`agent/dev_workflow.md`](agent/dev_workflow.md)
+- Prompting guidelines: [`agent/llm_prompting_guidelines.md`](agent/llm_prompting_guidelines.md)
+- Performance notes: [`agent/performance_notes.md`](agent/performance_notes.md)
+- pyRevit guides: [`agent/pyrevit/`](agent/pyrevit/)
+- Revit version documentation: [`agent/pyrevit/revit_version_documentation/`](agent/pyrevit/revit_version_documentation/)
 
-## Checklists
-- Code review: `checklists/code_review_checklist.md`
-- Git hygiene: `checklists/git_hygiene_checklist.md`
-- Testing strategy: `checklists/testing_strategy.md`
+## Agent-Only Assets
+- Checklists: [`agent/checklists/`](agent/checklists/)
+- Templates: [`agent/templates/`](agent/templates/)
+- Scripts: [`agent/scripts/`](agent/scripts/)
 
-## Plans (Work Notes)
-- Align+Move button: `plans/align_move_button_plan.md`
-- Finish lines multi-room flag: `plans/finish_lines_multi_room_flag_plan.md`
-- Finish lines to rooms: `plans/finish_lines_to_rooms_plan.md`
+## Workspace (Project-Specific)
+- Overview: [`../workspace/README.md`](../workspace/README.md)
+- Development plan: [`../workspace/development.md`](../workspace/development.md)
+- Backlog: [`../workspace/backlog.md`](../workspace/backlog.md)
+- Plans: [`../workspace/plans/`](../workspace/plans/)
+- Tasks: [`../workspace/tasks/`](../workspace/tasks/)
+- Reviews: [`../workspace/reviews/`](../workspace/reviews/)
+
+Return back: [`../README.md`](../README.md)
+Return to root: [`../../README.md`](../../README.md)

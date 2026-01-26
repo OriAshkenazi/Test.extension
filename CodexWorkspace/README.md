@@ -1,25 +1,24 @@
 # Codex Workspace
 
-This workspace is a curated knowledge base so Codex sessions can start quickly on Revit 2023 automation tasks.
+This workspace is a curated knowledge base for pyRevit development (docs, prompts, and planning artifacts).
 
-## Quick Start
-- Prefer the script engine already used by the command you are editing; avoid changing `#! python` / `#! python3` unless required.
-- Target Autodesk Revit 2023 APIs and avoid legacy `Document.New*` patterns.
-- Keep transactions explicit (`Transaction.Start()` / `Commit()`), and roll back inside `except` blocks.
-- Convert Python iterables to .NET collections (`List[ElementId]`) at API boundaries.
+## Start Here
+- Setup + first button walkthrough (no coding): [`docs/human/README.md`](docs/human/README.md).
+- Agent workflow, checklists, and references (advanced): [`docs/agent/README.md`](docs/agent/README.md).
+- Project planning artifacts: [`workspace/README.md`](workspace/README.md).
 
 ## Directory Tour
-- `docs` &mdash; documentation index (start at `docs/README.md`).
-- `docs/checklists` &mdash; ready-to-use review and testing checklists.
-- `prompts` &mdash; curated prompt snippets for generating, reviewing, and documenting code with Codex or GPT.
-- `scripts` &mdash; pyRevit-ready templates that follow the guidelines.
+- [`docs`](docs/README.md) - navigation for static docs (human + agent).
+- [`docs/human`](docs/human) - setup and troubleshooting.
+- [`docs/agent`](docs/agent) - agent-only guidance (workflow, prompting, pyRevit guides, checklists, templates).
+- [`workspace`](workspace) - plans, development.md, tasks, reviews, backlog.
+- [`prompts`](prompts) - prompt snippets for gpt-5.2 and gpt-5.2-codex.
+- [`docs/agent/scripts`](docs/agent/scripts) - pyRevit-ready templates and harnesses.
 
-## Suggested Workflow
-1. Read the relevant checklist before authoring or reviewing a tool.
-2. Start from the script template in `scripts/new_command_template.py`.
-3. Use the prompt snippets to guide Codex conversations about implementation or documentation.
-4. Use the docs index (`docs/README.md`) to jump to guides/reference quickly.
+## Notes
+- Current docs and templates are aligned with Autodesk Revit 2023 APIs; adjust as needed for other versions and avoid legacy `Document.New*` patterns.
+- Keep transactions explicit (`Transaction.Start()` / `Commit()`), and roll back inside `except` blocks.
+- Use [`docs/agent/pyrevit/revit_version_documentation/`](docs/agent/pyrevit/revit_version_documentation/) for version-specific guidance.
 
-## References
-- Primary source: `docs/reference/revit_2023_development_guidelines_with_llm_integration.md`.
-- Autodesk Revit 2023 API docs (lookup specifics when prompted).
+Return back: [`../README.md`](../README.md)
+Return to root: [`../README.md`](../README.md)
